@@ -1,7 +1,44 @@
 use super::media::*;
 
-static DISK_CPM22: &[u8] = include_bytes!("../disks/cpm22-rom232.img");
-static DISK_BLANK: &[u8] = include_bytes!("../disks/blank.img");
+// ============================================================================
+// KAYPRO DISK IMAGE SELECTION
+// ============================================================================
+// Uncomment ONE of the following sections to select the boot disk.
+// IMPORTANT: Also update the ROM selection in kaypro_machine.rs to match!
+
+// --- Kaypro 4/84 with ROM 81-292a (DSDD) ---
+// Uses: roms/81-292a.rom in kaypro_machine.rs
+//static DISK_CPM22: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
+//static DISK_BLANK: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
+//const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
+//const BOOT_DISK_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
+//const BLANK_DISK_NAME: &str = "Blank DSDD disk";
+
+// --- Kaypro 4/83 with ROM 81-232 (DSDD) ---
+// Uses: roms/81-232.rom in kaypro_machine.rs
+static DISK_CPM22: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
+static DISK_DIAGS: &[u8] = include_bytes!("../disks/cpm22-emudiags.img");
+const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
+const BOOT_DISK_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
+const DIAGS_DISK_NAME: &str = "Emulator Diagnostics (DSDD)";
+
+// --- Kaypro 4-84 with Turbo ROM 3.4 (DSDD) ---
+// Uses: roms/trom34.rom in kaypro_machine.rs
+// static DISK_CPM22: &[u8] = include_bytes!("../disks/k484_turborom_63k_boot.img");
+// static DISK_BLANK: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
+// const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
+// const BOOT_DISK_NAME: &str = "CP/M 2.2 Turbo ROM 3.4 (DSDD)";
+// const BLANK_DISK_NAME: &str = "Blank DSDD disk";
+
+// --- Kaypro II with ROM 81-149 (SSDD) ---
+// Uses: roms/81-149c.rom in kaypro_machine.rs
+// static DISK_CPM22: &[u8] = include_bytes!("../disks/cpm22-rom149.img");
+// static DISK_BLANK: &[u8] = include_bytes!("../disks/blank.img");
+// const DEFAULT_FORMAT: MediaFormat = MediaFormat::SsDd;
+// const BOOT_DISK_NAME: &str = "CP/M 2.2 Kaypro II (SSDD)";
+// const BLANK_DISK_NAME: &str = "Blank SSDD disk";
+
+// ============================================================================
 
 pub enum Drive {
     A = 0,
@@ -58,17 +95,17 @@ impl FloppyController {
             media: [
                 Media {
                     file: None,
-                    name: "CPM/2.2 embedded".to_owned(),
+                    name: BOOT_DISK_NAME.to_owned(),
                     content: DISK_CPM22.to_vec(),
-                    format: MediaFormat::SsDd,
+                    format: DEFAULT_FORMAT,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
                 Media {
                     file: None,
-                    name: "Blank disk embedded".to_owned(),
-                    content: DISK_BLANK.to_vec(),
-                    format: MediaFormat::SsDd,
+                    name: DIAGS_DISK_NAME.to_owned(),
+                    content: DISK_DIAGS.to_vec(),
+                    format: DEFAULT_FORMAT,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -211,13 +248,13 @@ impl FloppyController {
             let (valid, sector_id) = self.media_selected().read_address(side_2, track, sector);
             if valid {
                 if self.trace {
-                    println!("FDC: Read address ({},{},{})", side_2, track, sector);
+                    println!("FDC: Read address ({},{},{}) -> sector_id={}", side_2, track, sector, sector_id);
                 }
-                self.sector = self.media_selected().inc_sector(sector);
+                // Note: Real WD1793 does NOT modify sector register during READ ADDRESS
                 self.status = FDCStatus::NoError as u8;
                 self.data_buffer.clear();
                 self.data_buffer.push(self.track);
-                self.data_buffer.push(if side_2 {1} else {0});
+                self.data_buffer.push(0); // Kaypro 4-84: head byte is always 0 in sector ID
                 self.data_buffer.push(sector_id);
                 self.data_buffer.push(2); // For sector size 512
                 self.data_buffer.push(0xde); // CRC 1
@@ -336,7 +373,7 @@ impl FloppyController {
                 self.status = FDCStatus::NoError as u8;
                 self.read_index = 0;
                 self.read_last = 0;
-                self.sector += 1;
+                // Note: Real WD1793 does NOT auto-increment sector register for single-sector reads
             }
         }
 

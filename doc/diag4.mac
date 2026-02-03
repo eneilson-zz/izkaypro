@@ -1,0 +1,2511 @@
+                    
+          .z80
+;+---------------------------------------------------------------------------+
+;|									     |
+;|	kaypro diagnostics						     |
+;|									     |
+;|	copyright (c) 1983 by non-linear systems, inc.			     |
+;|									     |
+;|	no warranty is made, expressed or implied.			     |
+;|									     |
+;+---------------------------------------------------------------------------+ 
+;    History:
+;    1/17/84	plw  version 1.8
+;		     Display video ram errors, but do not halt test
+;    1/5/84	plw  version 1.7
+;		     Display rom errors, but do not halt test
+;    12/23/83	plw  version 1.6
+;		     Check write enable status after update
+;    11/26/83   jwf  version 1.5
+;               jwf  Add kaypro 4 universal equates
+;      
+;
+;-----------------------------------------------------------------------------
+;
+;			system / program equates
+;
+        
+true    equ     -1
+false   equ     not true
+
+debug   equ     false           ;if true then don't validate checksum        
+univ    equ     true            ;universal board flag
+                                        
+system	equ	4	        ;system type (2,4,10).
+rdonly	equ	false            ;if true, then hard disk test is read-only.
+deffcb	equ	5ch		;default fcb.
+tpa	equ	100h		;transient program area.
+                                
+	if system ne 10         ;switch #1 system memory size
+           if system eq 4 and univ eq true  ;switch #1a  kp4 univ size
+
+msize   equ     63              ;system memory size in k.
+
+           else
+
+msize	equ	64		;system memory size in k.
+
+           endif
+       	endif
+
+       	if system eq 10         ;switch #1
+
+msize	equ	60		;system memory size in k.
+
+	endif
+
+bias	equ	(msize-20)*1024	;bias for systems larger than 20k.
+bios	equ	bias+4a00h	;start of bios.
+wboot	equ	bios+3		;bios "wboot" entry point.
+const	equ	bios+6		;bios "const" entry point.
+conin	equ	bios+9		;bios "conin" entry point.
+conout	equ	bios+0ch	;bios "conout" entry point.
+seldsk	equ	bios+1bh	;bios "seldsk" entry point.
+settrk	equ	bios+1eh	;bios "settrk" entry point.
+setsec	equ	bios+21h	;bios "setsec" entry point.
+setdma	equ	bios+24h	;bios "setdma" entry point.
+read	equ	bios+27h	;bios "read" entry point.Šwrite	equ	bios+2ah	;bios "write" entry point.
+sectran	equ	bios+30h	;bios "sectran" entry point.
+
+fdstat	equ	10h		;1793 status register.
+
+        if univ eq false        ;switch #2 port assignments   ;if system ne 10
+
+bitport	equ	1ch		;system bit port.
+
+	endif
+
+	if univ eq true         ;switch #2                    ;if system eq 10
+
+bitport	equ	14h		;system bit port.
+rwcmd	equ	121ch		;6545 read/write command.
+strcmd	equ	1fh		;6545 strobe (tickle) command.
+vcdata	equ	1fh		;6545 data port.
+
+	endif
+
+bs	equ	8		;backspace character.
+lf	equ	0ah		;linefeed character.
+cr	equ	0dh		;carriage return character.
+ctlz	equ	1ah		;control-z (clear screen) character.
+del	equ	7fh		;"del" key.
+
+	entry	diag
+
+;
+;-----------------------------------------------------------------------------
+;
+;		    preliminary system ram diagnostics
+;
+;
+
+diag:	ld	sp,stkend	;calculate ram image check code.
+	ld	hl,0
+	ld	de,diag
+	ld	bc,param-diag
+diag0:	ld	a,(de)
+	add	a,l
+	ld	l,a
+	jr	nc,diag1
+	inc	h
+diag1:	add	hl,hl
+	jr	nc,diag2
+	inc	hl
+diag2:	inc	de
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,diag0
+	ld	de,(chkcode)	;compare with stored check code.
+	or	a
+	ex	de,hl
+	sbc	hl,de
+
+	jò	nz,diag3á       ;jumð tï diag³ onlù iæ checksum match 
+        ld      a,debug         ;anä debug=false
+        cp      true
+        jp      nz,diag3Š
+diag3a:	push	de		;error - display message and hang.
+	ld	hl,ermsg20
+	call	strout
+	pop	hl
+	call	wrdout
+
+	ld      a,debug         
+        cp      true
+        jp	nz,merr         ;jump to merr only if debug equals false
+
+
+
+diag3:	ld	hl,main		;perform a fast-complement test of ram in the
+	ld	bc,stkend-main+1;  the diagnostic program area.
+fc1:	ld	a,(hl)		;note: a fast-complement test reads a
+	cpl			;  location in ram,complements it,writes it
+	ld	(hl),a		;  back to ram,and verifies that it is stored
+	cp	(hl)		;  correctly.if it is correct,then the
+fc2:	jr	nz,fc2		;  original value is re-written into ram and
+	cpl			;  the test continues with the next location
+	ld	(hl),a		;  in ram until all the locations in the test
+	inc	hl		;  range are verfied.any error causes the
+	dec	bc		;  routine to hang in a tight loop.
+	ld	a,b
+	or	c
+	jr	nz,fc1
+
+	ld	hl,bios		;perform a fast-complement test of ram in the
+	ld	bc,0ffffh-bios+1;  bios area.
+fc3:	ld	a,(hl)
+	cpl
+	ld	(hl),a
+	cp	(hl)
+fc4:	jr	nz,fc4
+	cpl
+	ld	(hl),a
+	inc	hl
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,fc3
+
+;
+;-----------------------------------------------------------------------------
+;
+;		main diagnostic program
+;
+
+main:	ld	sp,stkend+1	;ram in the diagnostic program area and the
+				;  bios area appears to be ok.initialize the
+				;  stack pointer and continue on to system ram
+				;  diagnostics.
+
+	ld	a,(deffcb+1)	;if there is a 'c' in the default fcb, then
+	and	0dfh		;  set the multipass flag.
+	cp	'C'
+	jr	nz,mloop
+	ld	(mpass),a
+
+mloop:	ld	sp,stkend+1Š	call	clrscn		;clear the console screen.
+
+	ld	hl,msg0		;output the diagnostic sign-on message.
+	call	strout
+
+	ld	hl,(pass)	;increment and output the pass number.
+	inc	hl
+	ld	(pass),hl
+	call	decout
+	call	crlf
+	call	crlf
+
+	if system ne 10         ;switch #3  drive 'b' message
+
+	ld	a,h		;if pass number equals 0001,then output the
+	or	a		;  message:
+	jr	nz,mloop1
+	ld	a,l		;  insert a blank formatted diskette into
+	cp	1		;    drive 'b'
+	jr	nz,mloop1
+	ld	hl,msg13
+	call	strout
+
+	endif
+
+mloop1:	call	romtst		;test system rom.
+;	jr	nz,merr		;on error,exit to "merr".
+	call	xitchk		;if a key has been pressed,exit to "mexit".
+	jr	nz,mexit
+
+	call	srmtst		;test system ram.
+	jr	nz,merr		;on error,exit to "merr".
+	call	xitchk		;if a key has been pressed,exit to "mexit".
+	jr	nz,mexit
+
+	call	vrmtst		;test video display ram.
+;	jr	nz,merr		;on error,exit to "merr".
+	call	xitchk		;if a key has been pressed,exit to "mexit".
+	jr	nz,mexit
+
+        if univ eq true         ;switch #4  video ram test  ;if system eq 10
+
+	call	vatst		;test video attributes ram.
+;	jr	nz,merr		;on error,exit to "merr".
+	call	xitchk		;if a key has been pressed,exit to "mexit".
+	jr	nz,mexit
+
+	endif
+
+	call	fdtst		;test floppy disk drives.
+	jr	nz,merr		;on error,exit to "merr".
+	call	xitchk		;if a key has been pressed,exit to "mexit".
+	jr	nz,mexit
+
+	if system eq 10         ;switch #5 hard disk test
+
+	call	hdtst		;test hard disk drive.
+	jr	nz,merr		;on error,exit to "merr".
+	call	xitchk		;if a key has been pressed,exit to "mexit".
+	jr	nz,mexit
+Š	endif
+
+	ld	a,(loop)	;if the looping flag is not set,then exit to
+	or	a		;  "mexit".
+	jr	z,mexit
+	call	delay		;5-second delay.
+	ld	a,(mpass)	;if multipass flag is set, then loop.
+	or	a
+	jr	nz,mloop	;loop back to "mloop".
+	ld	a,1		;set exit type as normal.
+	ld	(xittype),a
+
+mexit:	ld	a,(xittype)	;display exit message.
+	ld	hl,msg14
+	cp	1
+	jr	z,mexit1
+	ld	hl,msg15
+	cp	2
+	jr	z,mexit1
+	ld	hl,msg16
+mexit1:	call	strout
+	jp	wboot		;return to cp/m.
+
+merr:	ld	hl,ermsg19	;display error-hang message.
+	call	strout
+merr1:	call	conin		;park hard disk.
+	jp	merr1
+
+;
+;-----------------------------------------------------------------------------
+;
+;		test system rom
+;
+;system rom will be tested in the following manner:
+;	move the rom diagnostic to 8000h and jump to the beginning of that
+;	  routine.
+;	calculate the 2-byte checksum of the system rom.
+;	jump back to romchk.
+;	lookup the checksum in the table of known-good checksums.if not found,
+;	  then process the error.
+
+romtst:	ld	hl,msg7		;output the message:
+	call	strout		;  testing system rom...
+
+	call	delay		;5-second delay.
+
+	ld	hl,romtst1	;move the rom diagnostic to 8000h.
+	ld	de,8000h
+	ld	bc,romchk-romtst1
+	ldir
+
+	jp	8000h		;jump to the beginning of the checksum routine
+				;  at 8000h.
+
+;------------   this routine gets moved to 8000h   ---------------------------
+;
+romtst1:in	a,(bitport)	;bank switch to access system rom.
+	set	7,a
+	out	(bitport),a
+
+	ld	hl,0		;calculate the 2-byte checksum of the systemŠ	ld	de,0		;  rom and place the result in register (hl).
+	ld	bc,1000h
+romtst2:ld	a,(de)
+	add	a,l
+	ld	l,a
+	jr	nc,romtst3
+	inc	h
+romtst3:inc	de
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,romtst2
+
+	in	a,(bitport)	;bank switch to restore system ram.
+	res	7,a
+	out	(bitport),a
+
+	jp	romchk		;jump back to "romchk".
+;-----------------------------------------------------------------------------
+;
+
+romchk:	ld	de,chktab	;lookup the checksum in the table of known-
+	ld	bc,chkend	;  good checksums.
+romchk1:ld	a,(de)
+	cp	l
+	jr	nz,romchk2
+	inc	de
+	ld	a,(de)
+	cp	h
+	jr	z,romchk3
+romchk2:inc	de
+	ld	a,e
+	cp	c
+	jr	nz,romchk1
+	ld	a,d
+	cp	b
+	jr	nz,romchk1
+	jr	romerr		;on error,goto "romerr".
+
+romchk3:ld	hl,msg8		;output the message:
+	call	strout		;  system rom ok
+
+	xor	a		;flag "no errors".
+	ret			;return to the main program loop.
+
+;
+;		display system rom error message
+;
+
+romerr:	push	hl		;"romtst" error processor.
+	ld	hl,ermsg12
+	call	strout		;output the message:
+	ld	hl,ermsg13	;  system rom error
+	call	strout		;  checksum value - xxxx
+	pop	hl
+	call	wrdout
+	call	crlf
+	call	crlf
+
+	ld	a,0ffh		;flag "error found".
+	or	aŠ	ret			;return to the main program loop.
+
+;
+;		system rom checksum tables
+;
+
+	if system eq 2          ;switch #6  rom checksum table
+
+chktab:	dw	0		;kaypro 2 system rom checksums table.
+	dw	5a70h
+chkend:	ds	0
+
+	endif
+
+	if system eq 4          ;switch #6
+
+chktab:	dw	0		;kaypro 4 system rom checksums table.
+	dw	018fh
+	dw	372bh
+	dw	0b69h
+	dw	25h
+chkend:	ds	0
+
+	endif
+
+	if system eq 10         ;switch #6
+
+chktab:	dw	0		;kaypro 10 system rom checksums table.
+	dw	17d3h
+	dw	160dh
+	dw	0132h
+	dw	0123h
+	dw	3d9ah
+	dw	0b06h
+chkend:	ds	0
+
+	endif
+
+;
+;-----------------------------------------------------------------------------
+;
+;		test system ram
+;
+;system ram will be tested in the following manner:
+;	test ram in locations 4000h to 0bfffh.on error,exit this sequence.
+;	move ram page zero and the diagnostic program to 4000h.
+;	test ram in locations 0 to 3fffh (except for the area containing the
+;	  test routines for this part of the sequence).on error,exit this
+;	  sequence.
+;	move ram page zero and the diagnostic program back to 0.
+;	move the bios to 4000h.
+;	test ram in locations 0c000h to 0ffffh.on error,exit this sequence.
+;	move the bios back to its original location.
+
+srmtst:	ld	hl,msg1		;output the message:
+	call	strout		;  testing system ram...
+
+	ld	hl,4000h	;perform a sliding-data test on ram in
+	ld	de,0bfffh	;  locations 4000h to 0bfffh.
+	ld	(param),de
+	ld	de,param
+	call	sd
+	cp	0ffh
+	ld	a,1
+	jp	z,sramer	;on error,exit to "sramer".
+Š	ld	hl,4000h	;perform an address-data test on ram in
+	ld	de,0bfffh	;  locations 4000h to 0bfffh.
+	ld	(param),de
+	ld	de,param
+	call	ad
+	cp	0ffh
+	ld	a,2
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,0		;move ram page 0 and the diagnostic program to
+	ld	de,4000h	;  4000h.
+	ld	bc,4000h
+	ldir
+
+srmtst1:ld	hl,4000h	;move the stack into mid-ram.
+	add	hl,sp
+	ld	sp,hl
+
+	ld	hl,0		;perform a sliding-data test on ram in
+	ld	de,srmtst1-1	;  locations 0 to "srmtst1"-1.
+	ld	(param+4000h),de
+	ld	de,param+4000h
+	call	sd
+	cp	0ffh
+	ld	a,1
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,0		;perform an address-data test on ram in
+	ld	de,srmtst1-1	;  locations 0 to "srmtst1"-1.
+	ld	(param+4000h),de
+	ld	de,param+4000h
+	call	ad
+	cp	0ffh
+	ld	a,2
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,rtend	;perform a sliding-data test on ram in
+	ld	de,3fffh	;  locations "rtend" to 3fffh.
+	ld	(param+4000h),de
+	ld	de,param+4000h
+	call	sd
+	cp	0ffh
+	ld	a,1
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,rtend	;perform an address-data test on ram in
+	ld	de,3fffh	;  locations "rtend" to 3fffh.
+	ld	(param+4000h),de
+	ld	de,param+4000h
+	call	ad
+	cp	0ffh
+	ld	a,2
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,4000h	;move ram page 0 and the diagnostic program
+	ld	de,0		;  back to 0.
+	ld	bc,4000h
+	ldir
+
+	ld	hl,0		;move the stack back to its original location.
+	add	hl,spŠ	ld	de,4000h
+	or	a
+	sbc	hl,de
+	ld	sp,hl
+
+	ld	hl,0c000h	;move the bios to 4000h.
+	ld	de,4000h
+	ld	bc,4000h
+	ldir
+
+	ld	hl,0c000h	;perform a sliding-data test on ram in
+	ld	de,0ffffh	;  locations 0c000h to 0ffffh.
+	ld	(param),de
+	ld	de,param
+	call	sd
+
+	ld	hl,4000h	;move the bios back to its original location.
+	ld	de,0c000h
+	ld	bc,4000h
+	ldir
+
+	cp	0ffh
+	ld	a,1
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,0c000h	;perform an address-data test on ram in
+	ld	de,0ffffh	;  locations 0c000h to 0ffffh.
+	ld	(param),de
+	ld	de,param
+	call	ad
+	cp	0ffh
+	ld	a,2
+	jp	z,sramer	;on error,exit to "sramer".
+
+	ld	hl,4000h	;move the bios back to its original location.
+	ld	de,0c000h
+	ld	bc,4000h
+	ldir
+
+	ld	hl,msg2		;output the message:
+	call	strout		;  system ram ok	
+
+	xor	a		;flag "no errors".
+	ret			;return to the main program loop.
+
+;
+;		display system ram error message
+;
+
+sramer:	push	af		;"srmtst"error processor.
+	push	hl
+	ld	hl,ermsg1
+	call	strout		;output the message:
+	pop	hl
+	call	wrdout		;  system ram error at address xxxx
+	call	crlf		;  expected data pattern - xxxxxxxx
+	ld	hl,ermsg2	;  observed data pattern - xxxxxxxx
+	call	strout		;  probable system {data/address} line problem
+	inc	de
+	ld	a,(de)
+	call	binoutŠ	call	crlf
+	ld	hl,ermsg3
+	call	strout
+	dec	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+	ld	hl,ermsg4
+	pop	af
+	rr	a
+	jr	c,sramer0
+	ld	hl,ermsg5
+sramer0:call	strout
+
+	ld	a,0ffh		;flag "error found".
+	or	a
+	ret			;return to the main program loop.
+;
+;-----------------------------------------------------------------------------
+;
+;		test video ram
+;
+;video ram will be tested in the following manner:
+;	move the contents of video ram to 9000h.
+;	test all video ram locations.on error,exit this sequence.
+;	move video ram contents back to the video ram area.
+
+vrmtst:	ld	hl,msg3		;output the message:
+	call	strout		;  testing video display ram...
+
+	call	delay		;5-second delay.
+
+	ld	hl,0		;move the contents of video ram to 9000h.
+	ld	de,9000h
+	ld	bc,1000h
+vrmtst1:call	cr4
+	ld	(de),a
+	inc	hl
+	inc	de
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,vrmtst1
+
+	ld	hl,0		;perform a sliding-data test on all the
+	ld	de,7ffh		;  locations in the video ram area.
+
+	if univ eq false        ;switch #7 define end of video ram;if system ne 10
+	
+	ld	de,0fffh
+
+	endif
+
+	ld	(param),de
+	ld	de,param
+	call	vsd
+	cp	0ffh
+	ld	a,1
+	jp	z,vramer	;on error,exit to "vramer".
+
+	ld	hl,0		;perform an address-data test on all theŠ	ld	de,7ffh		;  locations in the video ram area.
+
+	if univ eq false        ;switch #8 define end of video ram ;if system ne 10         
+
+	ld	de,0bffh        ;??? Why is this not 0fffh ???
+
+	endif
+
+	ld	(param),de
+	ld	de,param
+	call	vad
+	cp	0ffh
+	ld	a,2
+	jr	z,vramer	;on error,exit to "vramer".
+
+	ld	hl,0		;move video ram contents back to the video ram
+	ld	de,9000h	;  area.
+	ld	bc,1000h
+vrmtst2:ld	a,(de)
+	call	cr5
+	inc	hl
+	inc	de
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,vrmtst2
+
+	ld	hl,msg4		;output the message:
+	call	strout		;  video ram ok
+
+	xor	a		;flag "no errors".
+	ret			;return to the main program loop.
+
+;
+;		display video ram error message
+;
+
+vramer:	push	af		;"vrmtst" error processor.
+	push	bc
+	push	de
+	push	hl
+	ld	hl,0		;move video ram contents back to the video ram
+	ld	de,9000h	;  area.
+	ld	bc,1000h
+vramerx:ld	a,(de)
+	call	cr5
+	inc	hl
+	inc	de
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,vramerx
+	pop	hl
+	pop	de
+	pop	bc
+	push	hl
+	ld	hl,ermsg6
+	call	strout		;output the message:
+	pop	hl
+	call	wrdout		;  video display ram error at address xxxx
+	call	crlf		;  expected data pattern - xxxxxxxxŠ	ld	hl,ermsg2	;  observed data pattern - xxxxxxxx
+	call	strout		;  probable video {data/address} problem
+	inc	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+	ld	hl,ermsg3
+	call	strout
+	dec	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+	ld	hl,ermsg7
+	pop	af
+	rr	a
+	jr	c,vramer0
+	ld	hl,ermsg8
+vramer0:call	strout
+
+	ld	a,0ffh		;flag "error found".
+	or	a
+	ret			;return to the main program loop.
+
+	if univ eq true         ;switch #9 test video atr ram ;if system eq 10
+;
+;-----------------------------------------------------------------------------
+;
+;		test video attributes ram
+;
+
+vatst:	ld	hl,msg5		;output the message:
+	call	strout		;  testing video attributes ram...
+
+	call	delay		;5-second delay.
+
+	ld	hl,0		;perform a fast-complement test of video
+	ld	bc,800h		;  attributes ram.
+vatst0:	call	vatst1
+	cpl
+	call	vatst2
+	ld	d,a
+	call	vatst1
+	cp	d
+	jr	z,vatst5
+vatstxx:push	af
+	xor	d
+	ld	bc,800h
+vatstx:	rr	a
+	jr	nc,vatsty
+	inc	c
+vatsty:	djnz	vatstx
+	ld	b,1
+	ld	a,c
+	cp	3
+	pop	af
+	jp	m,vaerr
+	inc	b
+	jr	vaerr
+vatst5:	cpl
+	call	vatst2
+	ld	d,a		;********Š	call	vatst1		;********
+	cp	d		;********
+	jr	nz,vatstxx	;********
+	inc	hl
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,vatst0
+
+	ld	hl,msg6		;output the message:
+	call	strout		;  video attributes ram ok
+
+	xor	a		;flag "no errors".
+	ret			;return to the main program loop.
+
+;
+;		display  video attributes ram error message
+;
+
+vaerr:	push	bc
+	push	af		;"vatst" error processor.
+	push	de
+	push	hl		;output the message
+	ld	hl,ermsg9
+	call	strout		;  video attributes ram error at address xxxx
+	pop	hl		;  expected data pattern - xxxxxxxx
+	call	wrdout		;  observed data pattern - xxxxxxxx
+	call	crlf		;  probable video attributes {data/address}
+	ld	hl,ermsg2	;    line problem
+	call	strout
+	pop	de
+	ld	a,d
+	call	binout
+	call	crlf
+	ld	hl,ermsg3
+	call	strout
+	pop	af
+	call	binout
+	call	crlf
+	pop	bc
+	ld	a,b
+	ld	hl,ermsg10
+	cp	1
+	jr	z,vaerr3
+	ld	hl,ermsg11
+vaerr3:	call	strout
+
+	ld	a,0ffh		;flag "error found".
+	or	a
+	ret			;return to the main program loop.
+
+	endif
+
+;
+;-----------------------------------------------------------------------------
+;
+;		system ram / video ram diagnostic subroutines
+;
+;
+
+sd:	push	hlŠ	pop	ix
+	push	de		;the sliding-data test writes a pattern
+	pop	iy		;  (initially "00000001") into all locations
+	ld	d,1		;  of ram within the test range,verfies that
+sd0:	ld	e,8		;  the pattern is correctly stored in all
+sd1:	call	cr2		;  locations,left-rotates the pattern,and
+sd2:	ld	(hl),d		;  repeats the sequence.when all the ram is
+	call	cr1		;  tested with a "1" in all eight bit
+	jr	nz,sd2		;  positions,the procedure is repeated with
+	call	cr2		;  "11111110" as the initial pattern.any error
+sd3:	ld	a,(hl)		;  causes the routine to abort,the error being
+	cp	d		;  described in registers and memory (see
+	jr	nz,sd4		;  routine "cr3").register (a) will be set to
+	call	cr1		;  0ffh in the event of an error.
+	jr	nz,sd3
+	rlc	d		;upon entry to this routine,(hl) should
+	dec	e		;  contain the address of the first ram
+	jr	nz,sd1		;  location to be tested and (de) should
+	ld	a,d		;  contain the address of the last location.
+	cp	1
+	ld	d,0feh		;this test is useful for testing ram data
+	jr	nz,sd0		;  lines.
+	ld	de,0
+	xor	a
+	jr	sd5
+sd4:	ld	e,a
+	ld	a,0ffh
+sd5:	jr	ad5
+
+ad:	push	hl
+	pop	ix
+	push	de		;the address-data test writes into ram the
+	pop	iy		;  least-significant byte of the address for
+	call	cr2		;  the location being accessed.this is
+ad0:	ld	(hl),l		;  performed on all locations in the test
+	call	cr1		;  range.verification of contents is then
+	jr	nz,ad0		;  performed on all locations.the procedure is
+	call	cr2		;  then repeated,this time storing the most-
+ad1:	ld	a,l		;  significant byte of each address.any error
+	cp	(hl)		;  causes the routine to abort,the error being
+	jr	nz,ad4		;  described in registers and memory (see
+	call	cr1		;  routine "cr3").register (a) will be set to
+	jr	nz,ad1		;  0ffh in the event of an error.
+	call	cr2
+ad2:	ld	(hl),h		;upon entry to this routine,(hl) should
+	call	cr1		;  contain the address of the first ram
+	jr	nz,ad2		;  location to be tested and (de) should
+	call	cr2		;  contain the address of the last location.
+ad3:	ld	a,h
+	cp	(hl)		;this test is useful for testing ram address
+	jr	nz,ad4		;  lines.
+	call	cr1
+	jr	nz,ad3
+	ld	de,0
+	xor	a
+	jr	ad5
+ad4:	ld	d,a
+	ld	e,(hl)
+	ld	a,0ffh
+ad5:	jr	vsd5
+Švsd:	push	hl
+	pop	ix
+	push	de		;the video sliding-data test writes a pattern
+	pop	iy		;  (initially "00000001") into all locations
+	ld	d,1		;  of video ram withi the test range,verfies
+vsd0:	ld	e,8		;  that the pattern is correctly stored in all
+vsd1:	call	cr2		;  locations,left-rotates the pattern,and
+vsd2:	ld	a,d		;  repeats the sequence.when all the video ram
+	call	cr5		;  is tested with a "1" in all eight bit
+	call	cr1		;  positions,the procedure is repeated with
+	jr	nz,vsd2		;  "11111110" as the initial pattern.any error
+	call	cr2		;  causes the routine to abort,the error being
+vsd3:	call	cr4		;  described in registers and memory (see
+	cp	d		;  routine "cr3").register (a) will be set to
+	jr	nz,vsd4		;  0ffh in the event of an error.
+	call	cr1
+	jr	nz,vsd3		;upon entry to this routine,(hl) should
+	rlc	d		;  contain the address of the first video ram
+	dec	e		;  location to be tested and (de) should
+	jr	nz,vsd1		;  contain the address of the last location.
+	ld	a,d
+	cp	1		;this test is useful for testing video ram
+	ld	d,0feh		;  data lines.
+	jr	nz,vsd0
+	ld	de,0
+	xor	a
+	jr	vsd5
+vsd4:	ld	e,a
+	ld	a,0ffh
+vsd5:	jr	vad5
+
+vad:	push	hl
+	pop	ix
+	push	de		;the video address-data test writes into video
+	pop	iy		;  ram the least-significant byte of the
+	call	cr2		;  address of the location being accessed.this
+vad0:	ld	a,l		;  is performed on all locations in the test
+	call	cr5		;  range.verification of contents is then
+	call	xcr1		;  performed on all locations.the procedure is
+	jr	nz,vad0		;  then repeated,this time storing the most-
+	call	cr2		;  significant byte of the address.any error
+vad1:	call	cr4		;  causes the routine to abort,the error being
+	cp	l		;  described in registers and memory (see
+	ld	a,l
+	jr	nz,vad4		;  routine "cr3").register (a) will be set to
+	call	xcr1		;  0ffh in the event of an error.
+	jr	nz,vad1
+	call	cr2		;upon entry to this routine,(hl) should
+vad2:	ld	a,h		;  contain the address of the first video ram
+	call	cr5		;  location to be tested and (de) should
+	call	xcr1		;  contain the address of the last location.
+	jr	nz,vad2
+	call	cr2		;this test is useful for testing video ram
+vad3:	call	cr4		;  address lines.
+	cp	h
+	ld	a,h
+	jr	nz,vad4
+	call	xcr1
+	jr	nz,vad3
+	ld	de,0
+	xor	aŠ	jr	vad5
+vad4:	ld	d,a
+	call	cr4
+	ld	e,a
+	ld	a,0ffh
+vad5:	jr	cr3
+
+	if univ eq false        ;switch #10 who knows??? ;if system ne 10
+
+xcr1:	inc	hl	;********
+	dec	bc	;********
+	ld	a,l	;********
+	and	40h	;********
+	cp	40h	;********
+	jr	z,xcr1	;********
+	ld	a,b	;********
+	or	c	;********
+	ret		;********
+
+	endif
+
+        if univ eq true         ;switch #10           ;	if system eq 10
+
+xcr1:
+
+	endif
+
+cr1:	inc	hl		;increment the address register (hl),decrement
+	dec	bc		;  the byte counter (bc),and set the z-flag if
+	ld	a,b		;  the byte counter is zero.
+	or	c
+	ret
+
+cr2:	push	de		;calculate the number of bytes to be tested
+	push	iy		;  and place the result in the byte counter
+	pop	de		;  (bc).place the first address to be tested
+	ld	a,(de)		;  in the address register (hl).
+	ld	l,a
+	inc	de
+	ld	a,(de)
+	ld	h,a
+	push	ix
+	pop	de
+	or	a
+	sbc	hl,de
+	inc	hl
+	push	hl
+	pop	bc
+	push	ix
+	pop	hl
+	pop	de
+	ret
+
+cr3:	push	hl		;place the observed and expected data values
+	push	iy		;  in the first two parameter locations in
+	pop	hl
+	ld	(hl),e		;  ram.place the address of the first
+	inc	hl		;  parameter location in (de).place the
+	ld	(hl),d		;  address of the last tested ram location in
+	pop	hl		;  (hl).
+	push	iyŠ	pop	de
+	ret
+
+cr4:	push	bc		;read the video ram location pointed to by the
+	push	de		;  address register (hl) into register (a).
+	push	hl
+
+	if univ eq false        ;switch #11 2&4 video "read" driver ;if system ne 10
+
+	ld	hl,cr4x		;kaypro 2 & 4 video display ram "read" driver.
+	ld	de,8000h
+	ld	bc,cr4z-cr4x	;this routine moves up to 8000h,switches
+	ldir			;  banks,reads video ram,switches banks
+	pop	hl		;  agains,and jumps back.
+	push	hl
+	ld	de,3000h
+	add	hl,de
+	jp	8000h
+
+;------------   this routine gets moved to 8000h   ---------------------------
+;
+cr4x:	in	a,(bitport)
+	set	7,a
+	out	(bitport),a
+	ld	a,(hl)
+	ld	b,a
+	in	a,(bitport)
+	res	7,a
+	out	(bitport),a
+	ld	a,b
+	jp	cr4z
+;-----------------------------------------------------------------------------
+;
+
+cr4z:	ds	0
+	
+	endif
+
+	if univ eq true         ;switch #11                 ;if system eq 10
+
+	push	hl		;kaypro 10 video display ram "read" driver.
+	pop	de
+	ld	a,d
+	and	7
+	ld	d,a
+cr4x:	call	cr6
+	in	a,(vcdata)
+
+	endif
+
+	pop	hl
+	pop	de
+	pop	bc
+	ret
+
+        if univ eq true         ;switch #11                 ;if system eq 10
+
+cr4y:	push	bc
+	push	de
+	push	hl
+	jr	cr4xŠ
+	endif
+
+cr5:	push	af		;write the contents of register (a) into video
+	push	bc		;  ram at the location pointed to by the
+	push	de		;  address register (hl).
+	push	hl
+
+	if univ eq false        ;switch #12  2&4 video "write" driver ;if system ne 10
+
+	ld	hl,cr5x		;kaypro 2 & 4 video display ram "write"
+	ld	de,8000h	;  driver.
+	ld	bc,cr5z-cr5x
+	ldir			;this routine moves up to 8000h,switches
+	pop	hl		;  banks,writes video ram,switches banks
+	push	hl		;  again,and jumps back.
+	ld	de,3000h
+	add	hl,de
+	jp	8000h
+
+;------------   this routine gets moved to 8000h   ---------------------------
+;
+cr5x:	ld	b,a
+	in	a,(bitport)
+	set	7,a
+	out	(bitport),a
+	ld	(hl),b
+	in	a,(bitport)
+	res	7,a
+	out	(bitport),a
+	jp	cr5z
+;-----------------------------------------------------------------------------
+;
+
+cr5z:	ds	0
+
+	endif
+
+	if univ eq true         ;switch #12                   ;if system eq 10
+
+
+	push	hl		;kaypro 10 video display ram "write" driver.
+	pop	de
+	push	af
+	ld	a,d
+	and	7
+	ld	d,a
+	call	cr6
+	pop	af
+	out	(vcdata),a
+
+cr5xxx:	in	a,(c)
+	or	a
+	jp	p,cr5xxx
+
+	endif
+
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+
+	if univ eq true         ;switch #12                   ;if system eq 10
+Šcr6:	ld	bc,rwcmd
+	call	cr6y
+	dec	c
+	ld	a,strcmd
+	out	(c),a
+cr6x:	in	a,(c)
+	or	a
+	jp	p,cr6x
+	ret
+
+cr6y:	out	(c),b
+	inc	c
+	out	(c),d
+	dec	c
+	inc	b
+	out	(c),b
+	inc	c
+	out	(c),e
+	ret
+
+vatst1:	push	de		;read the video attributes ram location
+	push	hl		;  pointed to by the address register (hl)
+	ex	de,hl		;  into register (a).(kaypro 10 only).
+	call	vatst3
+	call	cr4y
+	ex	de,hl
+	pop	hl
+	pop	de
+	ret
+
+vatst2:	push	bc		;write the contents of register (a) into video
+	push	de		;  atributes ram at the location pointed to by
+	push	hl		;  the address register (hl).(kaypro 10 only).
+	ex	de,hl
+	push	af
+	call	vatst3
+	call	cr6
+	pop	af
+	out	(vcdata),a
+	ex	de,hl
+	pop	hl
+	pop	de
+	pop	bc
+	ret
+
+vatst3:	ld	hl,801h
+	add	hl,de
+	ld	a,h
+	and	7
+	or	8
+	ld	h,a
+	ex	de,hl
+	ret
+
+	endif
+
+rtend:	ds	0		;end of ram diagnostic routines.
+
+
+;
+;-----------------------------------------------------------------------------Š;
+;		test floppy disk drives
+;
+;floppy disk drives are tested in the following manner:
+;	perform a complement test on each of the floppy disk drives.on error,
+;	  exit this sequence.
+
+	if system ne 10         ;switch #13 one floppy or two
+
+fdtst:	ld	hl,msg9		;output the message:
+	call	strout		;  testing floppy disk drive 'a'...
+
+	ld	a,0		;specify drive "a".
+	ld	de,param
+	call	fdtstx		;test the disk.
+	or	a		;on error,exit to "fderr".
+	jr	nz,fderr
+
+	ld	hl,msg10	;output the message:
+	call	strout		;  floppy disk drive 'a' ok
+
+	ld	hl,msg11	;output the message:
+	call	strout		;  testing floppy disk drive 'b'...
+
+	ld	a,1		;specify drive "b".
+	ld	de,param
+	call	fdtstx		;test the disk.
+	or	a		;on error,exit to "fderr".
+	jr	nz,fderr
+
+	ld	hl,msg12	;output the message:
+	call	strout		;  floppy disk drive 'b' ok
+
+	xor	a		;flag "no errors"
+	ret			;return to the main program loop.
+
+	endif
+
+	if system eq 10         ;switch #13
+
+fdtst:	ld	hl,msg9		;output the message:
+	call	strout		;  testing floppy disk drive ...
+
+	ld	a,0		;specify drive "a".
+	ld	de,param
+	call	fdtstx		;test the disk.
+	or	a		;on error,exit to "fderr".
+	jr	nz,fderr
+
+	ld	hl,msg10	;output the message:
+	call	strout		;  floppy disk drive ok
+
+	xor	a		;flag "no errors".
+	ret			;return to the main program loop.
+
+	endif
+
+;
+;		display floppy disk drive error message
+;
+Šfderr:	push	hl		;"fdtst" error processor.
+	ld	hl,ermsg14	;output the message:
+	cp	1
+	jr	z,fderr1	;  disk {read/write/verify} error
+	ld	hl,ermsg15	;  track -  xxxx
+	cp	2		;  sector - xxxx
+	jr	z,fderr1	;  expected data pattern - xxxxxxxx
+	ld	hl,ermsg16	;  observed data pattern - xxxxxxxx
+fderr1:	call	strout
+	ld	hl,ermsg17
+	call	strout
+	pop	hl
+	push	hl
+	ld	l,h
+	ld	h,0
+	call	decout
+	call	crlf
+	ld	hl,ermsg18
+	call	strout
+	pop	hl
+	ld	h,0
+	call	decout
+	call	crlf
+	cp	3
+	jr	nz,fderr3
+	ld	hl,ermsg2
+	call	strout
+	inc	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+	ld	hl,ermsg3
+	call	strout
+	dec	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+fderr3:	call	crlf
+
+	ld	a,0ffh		;flag "error found".
+	or	a
+	ret			;return to the main program loop.
+
+;
+;		floppy disk drive diagnostic subroutine
+;
+
+fdtstx:	push	bc		;this routine selects the drive to be tested,
+	push	de		;  performs a complement test on each track
+				;  (all sectors for tracks 0,39,& 79,sector 0
+				;  for all the remaining tracks), and
+				;  re-selects the original drive.
+				;
+				;upon entry,register (a) contains the drive
+				;  code of the disk to be tested and (de)
+				;  contains the address of the first parameter
+				;  location.
+				;
+				;upon return,register (a) contains the error
+				;  code:
+				;Š				;  0	no errors.
+				;  1	read error.
+				;  2	write error.
+				;  3	verify error.
+				;
+				;  also,(hl) will contain the track and sector
+				;  numbers where an error has occurred,(de)
+				;  will contain the address of the first
+				;  parameter location,and the first two
+				;  parameter locations will contain the
+				;  observed and expected data values (in the
+				;  event of a verify error).
+
+	call	stdsk		;select the disk to be tested.
+
+	if system eq 2          ;switch #14  floppy drive dependent stuff
+
+	ld	d,39		;set up to start at track 39.
+
+	endif
+
+	if system ne 2          ;switch #14
+
+	ld	d,79		;set up to start at track 79.
+
+	endif
+
+fdtstx1:ld	hl,8000h	;set the "read" dma address.
+
+	call	fdtstx6		;set the maximum sector number.
+
+	call	rtrck		;read the track to be tested.
+	ld	e,a		;on error,exit to "fderrx".
+	dec	e
+	or	a
+	ld	a,1
+	jp	nz,fderrx
+	jr	fdtstxz
+
+fdtstxy:ld	hl,0b000h	;move the next track image down to 8000h.
+	push	de
+	ld	de,8000h
+	ld	bc,1400h
+	ldir
+	pop	de
+
+fdtstxz:ld	hl,8000h	;complement the track data.
+	ld	bc,1400h
+fdtstx2:ld	a,(hl)
+	cpl
+	ld	(hl),a
+	inc	hl
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,fdtstx2
+
+	push	hl		;display track number.
+	ld	l,d
+	ld	h,0
+	call	decoutŠ	pop	hl
+
+	ld	hl,8000h	;set the "write" dma address.
+
+	call	fdtstx6		;set the maximum sector number.
+
+	call	wtrck		;write the complemented data to the track
+	ld	e,a		;  being tested.
+	dec	e		;on error,exit to "fderrx".
+	or	a
+	ld	a,2
+	jp	nz,fderrx
+
+	ld	hl,0b000h	;set the "next track" dma address.
+
+	push	de		;set up to read a data from the next track to
+	ld	a,d		;  be tested.
+	dec	a
+	jp	p,fdtstx3
+	ld	a,39
+fdtstx3:ld	d,a
+
+	call	fdtstx6		;set the maximum sector number.
+
+	call	rtrck		;read the data from the next track.
+	or	a		;on error,exit to "fderrx".
+	ld	a,1
+	pop	hl
+	jr	nz,fderrx
+	ex	de,hl
+
+	ld	hl,9800h	;set the "verify read" dma address.
+
+	call	fdtstx6		;set the maximum sector number.
+
+	call	rtrck		;read the track being tested.
+	ld	e,a		;on error,exit to "fderrx".
+	dec	e
+	or	a
+	ld	a,1
+	jr	nz,fderrx
+
+	push	de		;compare the data from the first read with the
+	ld	hl,8000h	;  data from the second read.
+	call	fdtstx6
+	ld	a,e
+	ld	de,9800h
+	ld	bc,80h
+	cp	39
+	jr	nz,fdtstx4
+	ld	bc,1400h
+fdtstx4:ld	a,(de)
+	cp	(hl)
+	jr	nz,fdtstx9	;on error,exit to "fdtst9".
+	cpl			;complement the data.
+	ld	(hl),a
+	inc	hl
+	inc	de
+	dec	bc
+	ld	a,b
+	or	cŠ	jr	nz,fdtstx4
+	pop	de
+
+	ld	hl,8000h	;set the "write" dma address.
+
+	call	fdtstx6		;set the maximum sector number.
+
+	call	wtrck		;write the data back to the track being
+	ld	e,a		;  tested.
+	dec	e		;on error,exit to "fderrx".
+	or	a
+	ld	a,2
+	jr	nz,fderrx
+
+	call	undisp		;un-display track number.
+
+	call	xitchk		;if abort requested, then do so.
+	jp	nz,abort
+
+	dec	d		;decrement the track number.
+	jp	p,fdtstxy	;if more tracks to be tested,goto "fdtstx1".
+
+fdtstx5:ld	a,0		;re-select drive "a".
+	call	stdsk
+
+	pop	de
+	pop	bc
+	xor	a		;flag "no errors".
+	ret			;return to the calling program.
+
+fdtstx6:ld	a,d
+	cp	79
+	jr	z,fdtstx7
+	cp	39
+	jr	z,fdtstx7
+	cp	0
+	jr	z,fdtstx7
+	ld	e,0
+	ret
+fdtstx7:ld	e,39
+	ret
+
+fdtstx9:pop	de		;put the error track and sector numbers into
+	dec	bc		;  (de).
+	rl	c
+	rl	b
+	ld	e,b
+	pop	bc		;put the expected and observed data values
+	push	bc		;  into the first two parameter locations.
+	inc	bc
+	ld	(bc),a
+	dec	bc
+	ld	a,(hl)
+	ld	(bc),a
+	ld	a,3
+
+fderrx:	push	af		;re-select drive "a".
+	ld	a,0
+	call	stdsk
+	pop	af
+Š	call	undisp		;un-display track number.
+
+	ex	de,hl		;put the error track and sector numbers into
+	or	a		;  (hl).flag "error found".
+	pop	de
+	pop	bc
+	ret			;return to the calling program.
+
+	if system eq 10         ;switch #15 test hard disk drive
+
+;
+;-----------------------------------------------------------------------------
+;
+;		test hard disk drive
+;
+;the hard disk drive is tested in the following manner:
+;	perform a complement test on each of the hard disk drives.on error,
+;	  exit this sequence.
+
+hdtst:	ld	hl,msg11	;output the message:
+	call	strout		;  testing hard disk drive...
+
+	ld	a,1		;specify drive "b".
+	ld	de,param
+	call	hdtstx		;test the disk.
+	or	a		;on error,exit to "hderr".
+	jr	nz,hderr
+
+	ld	a,2		;specify drive "c".
+	ld	de,param
+	call	hdtstx		;test the disk.
+	or	a		;on error,exit to "hderr".
+	jr	nz,hderr
+
+	ld	hl,msg12	;output the message:
+	call	strout		;  hard disk drive ok
+
+	xor	a		;flag "no errors".
+	ret			;return to the main program loop.
+
+;
+;		display hard disk drive error message
+;
+
+hderr:	push	hl		;"hdtst" error processor.
+	ld	hl,ermsg14	;output the message:
+	cp	1
+	jr	z,hderr1	;  disk {read/write/verify} error
+	ld	hl,ermsg15	;  track -  xxxx
+	cp	2		;  sector - xxxx
+	jr	z,hderr1	;  expected data pattern - xxxxxxxx
+	ld	hl,ermsg16	;  observed data pattern - xxxxxxxx
+hderr1:	call	strout
+	ld	hl,ermsg17
+	call	strout
+	pop	hl
+	call	decout
+	call	crlf
+	ld	hl,ermsg18
+	call	strout
+	push	bcŠ	pop	hl
+	call	decout
+	call	crlf
+	cp	3
+	jr	nz,hderr2
+	ld	hl,ermsg2
+	call	strout
+	ld	de,param	;********
+	inc	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+	ld	hl,ermsg3
+	call	strout
+	dec	de
+	ld	a,(de)
+	call	binout
+	call	crlf
+hderr2:	call	crlf
+
+	ld	a,0ffh		;flag "error found".
+	or	a
+	ret			;return to the main program loop.
+
+;
+;		hard disk drive diagnostic subroutine
+;
+
+hdtstx:	push	de		;this routine selects the drive to be tested,
+				;  performs a complement test on each track
+				;  (all sectors for tracks 0,75,150,225,300,
+				;  375,450,and 533,sector 0 for all the
+				;  remaining tracks),and re-selects the
+				;  original drive.
+				;
+				;upon entry,register (a) contains the drive
+				;  code of the disk to be tested and (de)
+				;  contains the address of the first parameter
+				;  location.
+				;
+				;upon return,register (a) contains the error
+				;  code:
+				;
+				;  0	no errors.
+				;  1	read error.
+				;  2	write error.
+				;  3	verify error.
+				;
+				;  also,(hl) and (bc) will contain the track
+				;  and sector number of where an error
+				;  occurred,(de) will contain the address of
+				;  the first parameter location,and the first
+				;  two parameter locations will contain the
+				;  observed and expected data values (in the
+				;  event of a verify error).
+
+	call	stdsk		;select the drive to be tested.
+
+	ld	de,533		;set the maximum track number.
+
+	ld	a,0		;clear bad sector counter.Š	ld	(bscntr),a
+	ld	(bscntr+1),a
+
+hdtstx1:call	hdtstx6		;set the maximum sector number.
+
+	push	hl		;display track number.
+	push	de
+	pop	hl
+	call	decout
+	pop	hl
+	push	hl		;display bad-sector count.
+	ld	a,' '
+	call	chrout
+	call	chrout
+	ld	hl,(bscntr)
+	call	decout
+	ld	a,8
+	call	chrout
+	call	chrout
+	call	chrout
+	call	chrout
+	call	chrout
+	call	chrout
+	pop	hl
+
+	ld	hl,8000h	;set the "read" dma address.
+	call	rdhard		;read the track to be tested.
+	or	a		;on error,increment bs counter and goto
+
+	if rdonly eq true       ;switch #16 hard disk read only test ;if rdonly eq -1
+
+	jp	z,hdtstxx
+	push	bc
+	ld	c,a
+	ld	a,1
+	push	hl
+	ld	hl,bscntr
+	inc	(hl)
+	pop	hl
+	jp	hderrx
+
+	endif
+
+	jr	z,hdtstzz	;  "hdtstxx".
+	push	hl
+	ld	hl,bscntr
+	inc	(hl)
+	pop	hl
+	jp	hdtstxx
+
+hdtstzz:ld	hl,8000h	;complement the track data.
+hdtstx2:ld	a,(hl)
+	cpl
+	ld	(hl),a
+	inc	hl
+	ld	a,h
+	cp	0a2h
+	jr	nz,hdtstx2
+
+	ld	hl,8000h	;set the "write" dma address.
+	call	wrhard		;write the track being tested.Š	or	a		;on error,exit to "hderrx".
+	push	bc
+	ld	c,a
+	ld	a,2
+	jp	nz,hderrx
+	pop	bc
+
+	ld	hl,05000h	;set the "verify" dma address.
+	call	rdhard		;read the track being tested.
+	or	a		;on error,exit to "hderrx".
+	push	bc
+	ld	c,a
+	ld	a,1
+	jp	nz,hderrx
+	pop	bc
+
+	ld	hl,8000h	;verify the track data.
+	push	de
+	ld	de,05000h
+hdtstx3:ld	a,(de)
+	cp	(hl)
+	jr	z,hdtstx4
+	ld	(param),a
+	ld	a,(hl)		;********
+	ld	(param+1),a	;********
+	ld	a,3		;on error,exit to "hdtstx9".
+	pop	de
+	jp	hdtstx9
+hdtstx4:cpl			;complement the track data.
+	ld	(hl),a
+	inc	hl
+	inc	de
+	ld	a,l
+	cp	80h
+	jr	nz,hdtstz
+	ld	a,c
+	or	a
+	jr	z,hdtstx5
+hdtstz:	ld	a,h
+	cp	0a2h
+	jr	nz,hdtstx3
+hdtstx5:pop	de
+
+	ld	hl,8000h	;set the "write" dma address.
+	call	wrhard		;write the track being tested.
+	or	a		;on error,exit to "hderrx".
+	push	bc
+	ld	c,a
+	ld	a,2
+	jp	nz,hderrx
+	pop	bc
+
+hdtstxx:call	undisp		;un-display track number.
+
+	call	xitchk		;if abort requested, then do so.
+	jp	nz,abort
+
+	dec	de		;decrement the track counter.
+	ld	a,d		;if there are more tracks to test,then goto
+	cp	0ffh		;  "hdtstx1".
+	jp	nz,hdtstx1
+	pop	de
+
+	ld	a,0		;re-select drive "a".
+	call	stdsk
+
+	ld	hl,0
+	ld	bc,0
+	xor	a		;flag "no errors".
+	ret			;return to the calling program.
+
+hdtstx6:push	hl
+	ld	a,d
+	or	e
+	jr	z,hdtstx7
+	ld	hl,75
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	hl,150
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	hl,225
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	hl,300
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	hl,375
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	hl,450
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	hl,533
+	or	a
+	sbc	hl,de
+	jr	z,hdtstx7
+	ld	bc,0
+	pop	hl
+	ret
+hdtstx7:ld	bc,67
+	pop	hl
+	ret
+
+hdtstx9:push	de
+	ld	de,8000h
+	or	a
+	sbc	hl,de
+	ex	de,hl
+	ld	hl,2180h
+	or	a
+	sbc	hl,de
+	pop	de
+	rl	l
+	rl	hŠ	ld	c,h
+	dec	c
+	push	bc
+
+hderrx:	ex	de,hl
+	pop	de
+	pop	de
+	dec	c
+	ld	b,0
+
+	call	undisp		;un-display track number.
+
+	push	af		;re-select drive "a".
+	push	hl
+	ld	a,0
+	call	stdsk
+	pop	hl
+	pop	af
+
+	or	a		;flag "error found".
+	ret			;return to the calling program.
+
+	endif
+
+;
+;-----------------------------------------------------------------------------
+;
+;			general purpose subroutines
+;
+
+clrscn:	push	af		;clear the console screen and home the cursor
+	ld	a,ctlz		;  by outputing a control-z to the console.
+	call	chrout
+	pop	af
+	ret
+
+crlf:	push	af		;output a carriage return / linefeed sequence
+	ld	a,cr		;  to the console.
+	call	chrout
+	pop	af
+	ret
+
+delay:	push	af		;5-second delay.
+	push	bc
+	push	de
+	push	hl
+	ld	hl,0
+	ld	hl,1	;********
+delay1:	ld	b,10
+delay2:	ld	de,0
+	djnz	delay2
+	dec	hl
+	ld	a,h
+	or	l
+	jr	nz,delay1
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+Škeyst:	push	bc		;check the console keyboard status.if a key
+	push	de		;  has been pressed,then return with 0ffh in
+	push	hl		;  register (a),else return with zero in
+	call	const		;  register (a).
+	pop	hl
+	pop	de
+	pop	bc
+	ret
+
+xitchk:	call	keyst		;if a console key has been pressed,then input
+	or	a		;  the character and return with the z-flag
+	push	af		;  clear,else return with the z-flag set.
+	call	nz,chrin
+	ld	a,2		;set exit type as key-press.
+	ld	(xittype),a
+	pop	af
+	ret	nz
+	push	hl
+	ld	a,0d0h
+	out	(fdstat),a
+	push	af
+	pop	af
+	push	af
+	pop	af
+	push	af
+	pop	af
+	ld	hl,30000
+xitchk1:in	a,(fdstat)
+	bit	1,a
+	jr	z,xitchk2
+	dec	hl
+	ld	a,h
+	or	l
+	jr	nz,xitchk1
+	ld	a,0ffh
+	or	a
+	pop	hl
+	ret	z
+	ld	a,3		;set exit type as floppy-removal.
+	ld	(xittype),a
+	ret
+xitchk2:xor	a
+	pop	hl
+	ret
+
+abort:	ld	a,0		;select drive 'a'.
+	call	stdsk
+	jp	mexit		;return to cp/m.
+
+undisp:	push	af		;un-display track number.
+	push	bc
+	ld	b,4
+	ld	a,8
+undisp1:call	chrout
+	djnz	undisp1
+	ld	b,4
+	ld	a,20h
+undisp2:call	chrout
+	djnz	undisp2
+	ld	b,4
+	ld	a,8Šundisp3:call	chrout
+	djnz	undisp3
+	pop	bc
+	pop	af
+	ret
+
+chrin:	push	bc		;input a character from the console to
+	push	de		;  register (a) and echo it back to the
+	push	hl		;  console.
+	call	conin
+	call	chrout
+	pop	hl
+	pop	de
+	pop	bc
+	ret
+
+chrout:	push	af		;output the character in register (a) to the
+	push	bc		;  console.
+	push	de		;note: a carriage return will be expanded into
+	push	hl		;  a carriage return / linefeed sequence. a
+	ld	c,a		;  "del" character will be ignored.
+	cp	del
+	jr	z,chrout1
+	push	af
+	call	conout
+	pop	af
+	cp	cr
+	jr	nz,chrout1
+	ld	c,lf
+	call	conout
+chrout1:pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+
+strin:	push	af		;input a string from the console to the
+	push	bc		;  location pointed to by (hl) and terminate
+	push	hl		;  the string with a null (0).
+	ld	b,0		;note: pressing the "del" key will delete the
+strin1:	call	chrin		;  preceding character.
+	cp	del
+	jr	nz,strin3
+	ld	a,b
+	or	a
+	jr	z,strin1
+	dec	hl
+	dec	b
+	ld	a,bs
+	call	chrout
+	ld	a," "
+	call	chrout
+	ld	a,bs
+	call	chrout
+	jr	strin1
+strin3:	cp	cr
+	jr	z,strin5
+	ld	(hl),a
+	inc	hl
+	inc	b
+	jr	strin1Šstrin5:	ld	(hl),0
+	pop	hl
+	pop	bc
+	pop	af
+	ret	
+
+strout:	push	af		;output to the console the string pointed to
+	push	bc		;  by (hl). the string must be terminated with
+	push	de		;  a null (0).
+	push	hl
+strout1:ld	a,(hl)
+	or	a
+	jr	z,strout2
+	call	chrout
+	inc	hl
+	jr	strout1
+strout2:pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+
+hexout:	push	af		;convert the nibble in register (a) to ascii-
+	cp	10		;  hex and output it to the console.
+	jr	c,hexout1
+	add	a,7
+hexout1:add	a,30h
+	call	chrout
+	pop	af
+	ret
+
+bytout:	push	af		;convert the byte in register (a) to ascii-hex
+	srl	a		;  and output it to the console.
+	srl	a
+	srl	a
+	srl	a
+	call	hexout
+	pop	af
+	push	af
+	and	0fh
+	call	hexout
+	pop	af
+	ret
+
+wrdout:	push	af		;convert the 2-byte word in (hl) to ascii-hex
+	ld	a,h		;  and output it to the console.
+	call	bytout
+	ld	a,l
+	call	bytout
+	pop	af
+	ret
+
+binout:	push	af		;convert the byte in register (a) to ascii-
+	push	bc		;  binary and output it to the console.
+	ld	b,8
+	ld	c,a
+binout1:rl	c
+	ld	a,"0"
+	jr	nc,binout2
+	inc	a
+binout2:call	chroutŠ	djnz	binout1
+	pop	bc
+	pop	af
+	ret
+
+decout:	push	af		;convert the 2-byte value in (hl) to ascii-
+	push	bc		;  decimal and output it to the console.
+	push	de
+	push	hl
+	ld	b,16
+	ld	de,0
+decout0:add	hl,hl
+	ld	a,e
+	adc	a,e
+	daa
+	ld	e,a
+	ld	a,d
+	adc	a,d
+	daa
+	ld	d,a
+	djnz	decout0
+	ex	de,hl
+	call	wrdout
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+
+stdsk:	push	af		;select the disk indicated by the number in
+	push	bc		;  register (a).
+	push	de
+	ld	c,a
+	call	seldsk
+	ld	(dph),hl
+stdsk1:	pop	de
+	pop	bc
+	pop	af
+	ret
+
+sttrk:	push	af		;select the track indicated by the number in
+	push	bc		;  register (a).
+	push	de
+	push	hl
+	ld	b,0
+	ld	c,a
+	call	settrk
+	pop	hl
+	jr	stdsk1
+
+stsec:	push	af		;select the sector indicated by the number in
+	push	bc		;  register (a).
+	push	de
+	push	hl
+	ld	b,0
+	ld	c,a
+	ld	hl,(dph)
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	call	sectranŠ	ld	c,l
+	ld	b,0
+stsec1:	call	setsec
+	pop	hl
+	jr	stdsk1
+
+stdma:	push	af		;set the dma address to the address in (hl).
+	push	bc
+	push	de
+	push	hl
+	pop	bc
+	push	hl
+	call	setdma
+	pop	hl
+	jr	stdsk1
+
+fread:	push	bc		;read the specified 128-byte sector from the
+	push	de		;  selected floppy disk to specified dma
+	push	hl		;  address in ram.if there is an error,then
+	call	read		;  return with 01 in register (a),else return
+fread1:	pop	hl		;  with zero in register (a).
+	pop	de
+	pop	bc
+	ret
+
+fwrite:	push	bc		;write into the specified 128-byte sector on
+	push	de		;  the selected floppy disk from the dma
+	push	hl		;  address in ram.if there is an error,then
+	ld	c,1		;  return with 01 in register (a),else return
+	call	write		;  with zero in register (a).
+	jr	fread1
+
+rsctr:	push	bc		;read a sector.
+	push	de
+	push	hl		;upon entry,(de) contains the track and sector
+	ld	a,d		;  numbers and (hl) contains the dma address.
+	call	sttrk
+	ld	a,e		;upon return,register (a) contains the error
+	call	stsec		;  flag.
+	call	stdma
+	call	fread
+	jr	fread1
+
+wsctr:	push	bc		;write a sector.
+	push	de
+	push	hl		;upon entry,(de) contains the track and sector
+	ld	a,d		;  numbers and (hl) conatins the dma address.
+	call	sttrk
+	ld	a,e		;upon return,register (a) contains the error
+	call	stsec		;  flag.
+	call	stdma
+	call	fwrite
+	jr	fread1
+
+rtrck:	push	bc		;read a track.
+	push	de
+	push	hl		;upon entry,(de) contains the track number and
+	ld	b,e		;  the maximum sector number,and (hl) contains
+	inc	b		;  the dma address.
+rtrck1:	call	rsctr
+	or	a		;upon return,register (a) contains the errorŠ	ld	a,e		;  flag (bad sector number+1).
+	jr	nz,rtrck2
+	ld	a,80h
+	add	a,l
+	ld	l,a
+	ld	a,0
+	adc	a,h
+	ld	h,a
+	dec	e
+	djnz	rtrck1
+	xor	a
+	jp	fread1
+rtrck2:	inc	a
+	jp	fread1
+
+wtrck:	push	bc		;write a track.
+	push	de
+	push	hl		;upon entry,(de) contains the track number and
+	ld	b,e		;  the maximum sector number,and (hl) contains
+	inc	b		;  the dma address.
+wtrck1:	call	wsctr
+	or	a		;upon return,register (a) contains the error
+	ld	a,e		;  flag (bad sector number+1).
+	jr	nz,rtrck2
+	ld	a,80h
+	add	a,l
+	ld	l,a
+	ld	a,0
+	adc	a,h
+	ld	h,a
+	dec	e
+	djnz	wtrck1
+	xor	a
+	jp	fread1
+
+	if system eq 10         ;switch #17  hard disk read routine
+
+rdhard:	push	bc		;read a track from hard disk.
+	push	de
+	push	hl		;upon entry,(bc) contains the maximum sector
+	ld	b,c		;  number,(de) contains the track number,and
+	inc	b		;  (hl) contains the dma address.
+rdhard1:call	stdma		;
+	push	bc		;upon exit, register (a) contains the error
+	push	de		;  code (bad sector number+1).
+	push	hl
+	push	de
+	pop	bc
+	call	settrk
+	pop	hl
+	pop	de
+	pop	bc
+	ld	a,c
+	call	stsec
+	call	fread
+	or	a
+	jp	nz,rdhard3
+;********
+	push	hl
+	ld	hl,vbuff
+	call	stdmaŠ	pop	hl
+	push	bc
+	push	de
+	push	hl
+	push	de
+	pop	bc
+	call	settrk
+	pop	hl
+	pop	de
+	pop	bc
+	ld	a,c
+	add	a,5
+	and	3fh
+	call	stsec
+	call	fread
+	or	a
+	jp	nz,rdhard3
+;********
+;********
+	push	hl
+	ld	hl,vbuff
+	call	stdma
+	pop	hl
+	push	bc
+	push	de
+	push	hl
+	push	de
+	pop	bc
+	call	settrk
+	pop	hl
+	pop	de
+	pop	bc
+	ld	a,c
+	call	stsec
+	call	fread
+	or	a
+	jr	nz,rdhard3
+	push	bc
+	push	de
+	push	hl
+	ld	de,vbuff
+	ld	b,80h
+rdhardx:ld	a,(de)
+	cp	(hl)
+	ld	a,0ffh
+	jr	nz,rdhardy
+	inc	hl
+	inc	de
+	djnz	rdhardx
+	ld	a,0
+rdhardy:pop	hl
+	pop	de
+	pop	bc
+	or	a
+	jr	nz,rdhard3
+;********
+	ld	a,80h
+	add	a,l
+	ld	l,a
+	ld	a,0
+	adc	a,hŠ	ld	h,a
+	dec	c
+	dec	b
+	jp	nz,rdhard1
+	xor	a
+	jr	rdhard4
+rdhard3:ld	a,c
+	inc	a
+rdhard4:pop	hl
+	pop	de
+	pop	bc
+	ret
+
+wrhard:	push	bc		;write a track from hard disk.
+	push	de
+	push	hl		;upon entry,(bc) contains the maximum sector
+	ld	b,c		;  number,(de) contains the track number,and
+	inc	b		;  (hl) contains the dma address.
+wrhard1:call	stdma		;
+	push	bc		;upon exit, register (a) contains the error
+	push	de		;  code (bad sector number+1).
+	push	hl
+	push	de
+	pop	bc
+	call	settrk
+	pop	hl
+	pop	de
+	pop	bc
+	ld	a,c
+	call	stsec
+	call	fwrite
+	or	a
+	jp	nz,wrhard3
+;********
+	push	hl
+	ld	hl,vbuff
+	call	stdma
+	pop	hl
+	push	bc
+	push	de
+	push	hl
+	push	de
+	pop	bc
+	call	settrk
+	pop	hl
+	pop	de
+	pop	bc
+	ld	a,c
+	add	a,5
+	and	3fh
+	call	stsec
+	call	fread
+	or	a
+	jp	nz,wrhard3
+;********
+;********
+	push	hl
+	ld	hl,vbuff
+	call	stdma
+	pop	hl
+	push	bcŠ	push	de
+	push	hl
+	push	de
+	pop	bc
+	call	settrk
+	pop	hl
+	pop	de
+	pop	bc
+	ld	a,c
+	call	stsec
+	call	fread
+	or	a
+	jr	nz,wrhard3
+	push	bc
+	push	de
+	push	hl
+	ld	de,vbuff
+	ld	b,80h
+wrhardx:ld	a,(de)
+	cp	(hl)
+	ld	a,0ffh
+	jr	nz,wrhardy
+	inc	hl
+	inc	de
+	djnz	wrhardx
+	ld	a,0
+wrhardy:pop	hl
+	pop	de
+	pop	bc
+	or	a
+	jr	nz,wrhard3
+;********
+	ld	a,80h
+	add	a,l
+	ld	l,a
+	ld	a,0
+	adc	a,h
+	ld	h,a
+	dec	c
+	dec	b
+	jp	nz,wrhard1
+	xor	a
+	jr	wrhard4
+wrhard3:ld	a,c
+	inc	a
+wrhard4:pop	hl
+	pop	de
+	pop	bc
+	ret
+
+	endif
+
+;
+;-----------------------------------------------------------------------------
+;
+;			message strings
+;
+
+msg0:	db	"<<<   Kaypro "
+	if system eq 2          ;switch #18 model # output
+	db	"2"Š	endif
+	if system eq 4          ;switch #18
+	db	"4"
+	endif
+	if system eq 10         ;switch #18
+	db	"10"
+	endif
+	db	" System Diagnostics (version 1.8)    >>>"
+	db	"     pass - ",0
+msg1:	db	"<2> Testing system RAM................",0
+msg2:	db	"System RAM ok",cr,cr,0
+msg3:	db	"<3> Testing video display RAM.........",0
+msg4:	db	"Video display RAM ok",cr,cr,0
+msg5:	db	"<4> Testing video attributes RAM......",0
+msg6:	db	"Video attributes RAM ok",cr,cr,0
+msg7:	db	"<1> Testing system ROM................",0
+msg8:	db	"System ROM ok",cr,cr,0
+	if system ne 10         ;switch #19 one or two floppy drives
+msg9:	db	"<5> Testing floppy disk drive 'a'.....",0
+msg10:	db	"Floppy disk drive 'a' ok",cr,cr,0
+msg11:	db	"<6> Testing floppy disk drive 'b'.....",0
+msg12:	db	"Floppy disk drive 'b' ok",cr,cr,0
+	endif
+	if system eq 10         ;switch #19
+msg9:	db	"<5> Testing floppy disk drive.........",0
+msg10:	db	"Floppy disk drive ok",cr,cr,0
+msg11:	db	"<6> Testing hard disk drive...........",0
+msg12:	db	"Hard disk drive ok",cr,cr,0
+	endif
+	if system ne 10         ;switch #19
+msg13:	db	"Insert a blank formatted diskette into drive 'b'.",cr,cr,0
+	endif
+msg14:	db	cr,"Exit from DIAG"
+        if system eq 2
+        db      "2"
+        endif
+        if system eq 4
+        db      "4"
+        endif
+        if system eq 10
+        db      "10"
+        endif
+        db      " - Normal end of test",cr,0                                                                                                                                             
+msg15:	db	cr,"Exit from DIAG"
+        if system eq 2
+        db      "2"
+        endif
+	if system eq 4
+	db	"4"
+	endif
+	if system eq 10
+	db	"10"
+	endif
+	db	" - Keyboard interrupt",cr,0
+msg16:	db	cr,"Exit from DIAG"
+        if system eq 2
+        db      "2"
+	endif
+	if system eq 4
+	db	"4"
+	endifŠ	if system eq 10
+	db	"10"
+	endif
+	db	" - Floppy disk removed",cr,0
+
+ermsg1:	db	cr,cr,"        System RAM error at address ",0
+ermsg2:	db	"        Expected data pattern - ",0
+ermsg3:	db	"        Observed data pattern - ",0
+ermsg4:	db	"        Probable system RAM data problem",cr,cr,0
+ermsg5:	db	"        Probable system RAM address problem",cr,cr,0
+ermsg6:	db	cr,cr,"        Video display RAM error at address ",0
+ermsg7:	db	"        Probable video display RAM data problem",cr,cr,0
+ermsg8:	db	"        Probable video display RAM address problem",cr,cr,0
+ermsg9:	db	cr,cr,"        Video attributes RAM error at address ",0
+ermsg10:db	"        Probable video attributes RAM data problem",cr,cr,0
+ermsg11:db	"        Probable video attributes RAM address problem",cr,cr,0
+ermsg12:db	cr,cr,"        System ROM error",cr,0
+ermsg13:db	"        Checksum value - ",0
+ermsg14:db	cr,cr,"        Disk read error",cr,0
+ermsg15:db	cr,cr,"        Disk write error",cr,0
+ermsg16:db	cr,cr,"        Disk verify error",cr,0
+ermsg17:db	"        Track -  ",0
+ermsg18:db	"        Sector - ",0
+ermsg19:db	cr,"ERROR - Diagnostic is halted",cr,0
+ermsg20:db	cr,"DIAG"
+        if system eq 2
+        db      "2"
+	endif
+	if system eq 4
+	db	"4"
+	endif
+	if system eq 10
+	db	"10"
+	endif
+	db	" RAM image check code error - ",0
+
+;
+;-----------------------------------------------------------------------------
+;
+;			data / stack area
+;
+
+loop:	db	0ffh		;if this flag is set to a non-zero value,then
+				;  the main program will loop until an error
+				;  is detected or until a console key is
+				;  pressed.
+
+pass:	dw	0		;main program loop pass counter.
+
+mpass:	db	0		;multipass flag.
+
+param:	ds	8		;buffer area for parameter passing.
+
+	if system eq 2
+
+chkcode:dw	8c7ah
+
+	endif
+
+	if system eq 4 and univ eq false
+
+chkcode:dw	1cfah
+
+	endif
+
+        iæ systeí eñ ´ anä uniö eñ truå ;switcè #2° checkcodå foò eacè system
+
+chkcode:dw      0f081h          ;diag4u ram image check code.
+
+        endif
+
+        if system eq 10         ;switch #20
+                        Šchkcode:dw	0a0c7h		;diag10 ram image check code.
+
+        endif
+
+bscntr:	ds	2		;bad sector counter.
+
+dph:	ds	2		;address of disk parameter header.
+
+xittype:ds	1		;test exit type:
+				;  1 - normal end of test
+				;  2 - key-press
+				;  3 - floppy-removal
+
+vbuff:	ds	128		;disk transfer verify buffer.
+
+stack:	ds	200		;stack area.
+stkend	equ	$-1		;top of stack.
+
+;
+;-----------------------------------------------------------------------------
+;
+
+	end	diag
+

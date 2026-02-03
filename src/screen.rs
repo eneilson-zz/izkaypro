@@ -1,5 +1,6 @@
 use std::io::{stdout, Write};
 use super::KayproMachine;
+use super::kaypro_machine::VideoMode;
 
 pub struct Screen {
     in_place: bool,
@@ -64,11 +65,11 @@ impl Screen {
         }
     }
 
-    pub fn prompt(&mut self, machine: &mut KayproMachine, message: &str) -> String {
+    pub fn prompt(&mut self, machine: &mut KayproMachine, message: &str) -> Option<String> {
         if self.in_place {
             print!("\x1b[{}A", 20);
             println!("//==================================================================================\\\\");
-            println!("||                                                                                  ||");
+            println!("||                                                                    (ESC cancels) ||");
             println!("\\\\==================================================================================//");
             print!("\x1b[{}A", 2);
             print!("|| {}: ", message);
@@ -78,15 +79,22 @@ impl Screen {
             self.update(machine, true);
             line
         } else {
-            print!("{}: ", message);
+            print!("{} (ESC cancels): ", message);
             stdout().flush().unwrap();
             machine.keyboard.read_line()
         }
     }
 
     pub fn update(&mut self, machine: &mut KayproMachine, force: bool) {
+        // Check if we need to update based on video mode
+        let vram_dirty = if machine.video_mode == VideoMode::Sy6545Crtc {
+            machine.crtc.vram_dirty
+        } else {
+            machine.vram_dirty
+        };
+        
         let relevant_system_bits = machine.system_bits & SHOWN_SYSTEM_BITS;
-        if !force && !machine.vram_dirty && self.last_system_bits == relevant_system_bits {
+        if !force && !vram_dirty && self.last_system_bits == relevant_system_bits {
             return;
         }
         self.last_system_bits = relevant_system_bits;
@@ -115,10 +123,22 @@ impl Screen {
         } else {
             println!("//==================================================================================\\\\");
         }
+        
+        // For CRTC mode, display uses 128-byte stride starting at 0x300
+        // (based on original working implementation from thread summary)
         for row in 0..24 {
             print!("|| ");
             for col in 0..80 {
-                let code = machine.vram[(row * 128 + col) as usize];
+                let code = if machine.video_mode == VideoMode::Sy6545Crtc {
+                    // CRTC mode: linear 80-byte rows from start_addr (R12:R13)
+                    // VRAM wraps at 2KB (0x800) for hardware scrolling
+                    let start = machine.crtc.start_addr();
+                    let addr = (start + row * 80 + col) & 0x7FF; // 2KB wrap
+                    machine.crtc.get_vram(addr)
+                } else {
+                    // Memory-mapped mode: 128-byte stride from 0x0
+                    machine.vram[(row * 128 + col) as usize]
+                };
                 let ch = translate_char(code);
                 if code & 0x80 == 0 {
                     print!("{}", ch);
@@ -130,12 +150,17 @@ impl Screen {
             println!(" ||");
         }
         println!("\\\\======{}==================================== F1 for help ==== F4 to exit ====//", disk_status);
-        //println!("\\\\==================================================================================//");
 
         if self.show_help {
             self.update_help(machine)
         }
-        machine.vram_dirty = false;
+        
+        // Clear dirty flag on appropriate VRAM
+        if machine.video_mode == VideoMode::Sy6545Crtc {
+            machine.crtc.vram_dirty = false;
+        } else {
+            machine.vram_dirty = false;
+        }
     }
 
     fn update_help (&mut self, machine: &KayproMachine) {

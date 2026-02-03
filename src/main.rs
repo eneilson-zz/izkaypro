@@ -6,16 +6,18 @@ mod floppy_controller;
 mod keyboard_unix;
 mod media;
 mod screen;
+mod sy6545;
+mod diagnostics;
 
 use self::kaypro_machine::KayproMachine;
 use self::floppy_controller::FloppyController;
 use self::screen::Screen;
 use self::keyboard_unix::Command;
 
-// Welcome message
+// Welcome message - Update this when switching Kaypro models
 const WELCOME: &str =
 "Kaypro https://github.com/ivanizag/izkaypro
-Emulation of the Kaypro II computer";
+Emulation of Kaypro 2X/4/84 (DSDD, 81-292a ROM) - see kaypro_machine.rs to switch models";
 
 
 fn main() {
@@ -57,6 +59,14 @@ fn main() {
             .short("b")
             .long("bdos-trace")
             .help("Traces calls to the CP/M BDOS entrypoints"))
+        .arg(Arg::with_name("crtc_trace")
+            .short("v")
+            .long("crtc-trace")
+            .help("Traces SY6545 CRTC VRAM writes"))
+        .arg(Arg::with_name("run_diag")
+            .short("d")
+            .long("diagnostics")
+            .help("Run ROM and RAM diagnostics then exit"))
         .get_matches();
 
     let disk_a = matches.value_of("DISKA");
@@ -68,6 +78,8 @@ fn main() {
     let trace_system_bits = matches.is_present("system_bits");
     let trace_rom = matches.is_present("rom_trace");
     let trace_bdos = matches.is_present("bdos_trace");
+    let trace_crtc = matches.is_present("crtc_trace");
+    let run_diag = matches.is_present("run_diag");
 
     let any_trace = trace_io
         || trace_cpu
@@ -75,13 +87,14 @@ fn main() {
         || trace_fdc_rw
         || trace_rom
         || trace_bdos
+        || trace_crtc
         || trace_system_bits;
 
     // Init device
     let floppy_controller = FloppyController::new(trace_fdc, trace_fdc_rw);
     let mut screen = Screen::new(!any_trace);
     let mut machine = KayproMachine::new(floppy_controller,
-        trace_io, trace_system_bits);
+        trace_io, trace_system_bits, trace_crtc);
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);
 
@@ -99,6 +112,16 @@ fn main() {
             println!("Error loading file '{}': {}", disk_b, err);
             return;
         }
+    }
+
+    // Run diagnostics if requested
+    if run_diag {
+        println!("{}", WELCOME);
+        // Determine ROM size based on current configuration
+        let rom_size = 0x1000; // 4KB for most Kaypro ROMs
+        let results = diagnostics::run_diagnostics(&mut machine, rom_size);
+        diagnostics::print_results(&results);
+        return;
     }
 
     // Start the cpu
@@ -136,17 +159,19 @@ fn main() {
                         screen.show_status = !screen.show_status;
                     },
                     Command::SelectDiskA => {
-                        let path = screen.prompt(&mut machine, "File to load in Drive A");
-                        let res = machine.floppy_controller.media_a_mut().load_disk(path.as_str());
-                        if let Err(err) = res {
-                            screen.message(&mut machine, &err.to_string())
+                        if let Some(path) = screen.prompt(&mut machine, "File to load in Drive A") {
+                            let res = machine.floppy_controller.media_a_mut().load_disk(path.as_str());
+                            if let Err(err) = res {
+                                screen.message(&mut machine, &err.to_string())
+                            }
                         }
                     }
                     Command::SelectDiskB => {
-                        let path = screen.prompt(& mut machine, "File to load in Drive B");
-                        let res = machine.floppy_controller.media_b_mut().load_disk(path.as_str());
-                        if let Err(err) = res {
-                            screen.message(&mut machine, &err.to_string())
+                        if let Some(path) = screen.prompt(&mut machine, "File to load in Drive B") {
+                            let res = machine.floppy_controller.media_b_mut().load_disk(path.as_str());
+                            if let Err(err) = res {
+                                screen.message(&mut machine, &err.to_string())
+                            }
                         }
                     }
                     Command::SaveMemory => {

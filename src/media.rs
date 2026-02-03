@@ -32,7 +32,7 @@ File images:
     and so on.
 */
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum MediaFormat {
     Unformatted,
     SsSd,     // Single-sided, single-density
@@ -165,27 +165,21 @@ impl Media {
         track < self.tracks()
     }
 
-    pub fn read_address(&self, side_2: bool, track: u8, sector: u8) -> (bool, u8) {
+    pub fn read_address(&self, side_2: bool, track: u8, _sector: u8) -> (bool, u8) {
         if track >= self.tracks() || (side_2 && !self.double_sided()) {
-            // No formatted info
+            // No formatted info - side 2 requested on single-sided disk
             return (false, 0);
         }
 
-        let mut real_sector = sector % self.sectors_per_side();
-        if side_2 {
-            real_sector += self.sectors_per_side();
-        }
-        (true, real_sector)
-    }
-
-
-    pub fn inc_sector(&self, sector: u8) -> u8 {
-        let new_sector = sector + 1;
-        if new_sector >= self.sectors_per_side() {
-            0
+        // READ ADDRESS returns the sector ID from the next sector header encountered.
+        // For format detection, we just need to return a valid sector ID for the current side.
+        // Side 0: sector IDs 0-9, Side 1: sector IDs 10-19
+        let sector_id = if side_2 {
+            10  // First sector on side 1
         } else {
-            new_sector
-        }
+            0   // First sector on side 0
+        };
+        (true, sector_id)
     }
 
     pub fn sector_index(&self, side_2: bool, track: u8, sector: u8) -> (bool, usize, usize) {
@@ -199,15 +193,15 @@ impl Media {
             return (false, 0, 0);
         }
         if !side_2 && sector >= self.sectors_per_side() {
-            // Sector out of range for side 1
+            // Sector out of range for side 0 (sectors 0-9)
             return (false, 0, 0);
         }
         if side_2 && sector < self.sectors_per_side() {
-            // Sector too low for side 1
+            // Sector ID too low for side 1 (expects 10-19)
             return (false, 0, 0);
         }
-        if side_2 && sector >=self.sectors() {
-            // Sector out of range for side 2
+        if side_2 && sector >= self.sectors() {
+            // Sector out of range for side 1 (sectors 10-19)
             return (false, 0, 0);
         }
     

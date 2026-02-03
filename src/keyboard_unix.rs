@@ -19,9 +19,8 @@ pub enum Command {
 
 pub struct Keyboard {
     initial_termios: Option<Termios>,
-    key: u8,
+    key_buffer: Vec<u8>,  // Buffer for queued keys
     pub commands: Vec<Command>,
-    key_available: bool,
 }
 
 impl Keyboard {
@@ -31,9 +30,8 @@ impl Keyboard {
 
         let c = Keyboard {
             initial_termios,
-            key: 0,
+            key_buffer: Vec::new(),
             commands: Vec::<Command>::new(),
-            key_available: false,
         };
 
         c.setup_host_terminal(false);
@@ -52,31 +50,63 @@ impl Keyboard {
 
     pub fn is_key_pressed(&mut self) -> bool {
         self.consume_input();
-        if !self.key_available {
+        if self.key_buffer.is_empty() {
             // Avoid 100% CPU usage waiting for input.
             thread::sleep(Duration::from_nanos(100));
         }
-        self.key_available
+        !self.key_buffer.is_empty()
     }
 
     pub fn get_key(&mut self) -> u8 {
         self.consume_input();
-        self.key_available = false;
-        self.key
+        if self.key_buffer.is_empty() {
+            0
+        } else {
+            self.key_buffer.remove(0)
+        }
     }
 
     pub fn peek_key(&mut self) -> u8 {
-        self.key
+        *self.key_buffer.first().unwrap_or(&0)
     }
 
-    pub fn read_line(&mut self) -> String {
-        if let Some(initial) = self.initial_termios {
-            tcsetattr(STDIN_FD, TCSANOW, &initial).unwrap();
-        }
+    pub fn read_line(&mut self) -> Option<String> {
+        use std::io::Write;
+        
+        // Use raw mode to detect ESC
+        self.setup_host_terminal(true); // blocking mode
+        
         let mut buffer = String::new();
-        stdin().read_line(&mut buffer).unwrap();
-        self.setup_host_terminal(false);
-        buffer.trim().to_string()
+        let mut buf = [0u8; 1];
+        
+        loop {
+            if stdin().read(&mut buf).unwrap_or(0) == 1 {
+                match buf[0] {
+                    0x1b => { // ESC - cancel
+                        self.setup_host_terminal(false);
+                        return None;
+                    }
+                    0x0d | 0x0a => { // Enter
+                        println!(); // newline
+                        self.setup_host_terminal(false);
+                        return Some(buffer);
+                    }
+                    0x7f | 0x08 => { // Backspace/Delete
+                        if !buffer.is_empty() {
+                            buffer.pop();
+                            print!("\x08 \x08"); // erase character
+                            std::io::stdout().flush().unwrap();
+                        }
+                    }
+                    c if c >= 0x20 && c < 0x7f => { // Printable
+                        buffer.push(c as char);
+                        print!("{}", c as char);
+                        std::io::stdout().flush().unwrap();
+                    }
+                    _ => {} // Ignore other control chars
+                }
+            }
+        }
     }
 
     pub fn consume_input(&mut self) {
@@ -109,78 +139,72 @@ impl Keyboard {
                 seq.push(input[i] as char);
                 i += 1;
             }
-            //println!("Escape sequence: {}", seq);
+            // Debug: uncomment to see escape sequences
+            // println!("Escape sequence: {:?}", seq);
 
             // Execute "showkey -a" to find the key codes
             match seq.as_str() {
-                "OP" => { // F1
+                "OP" | "Op" => { // F1 (Linux, macOS application mode)
                     self.commands.push(Command::Help);
                 }
-                "OQ" => { // F2
+                "OQ" | "Oq" => { // F2 (Linux, macOS application mode)
                     self.commands.push(Command::ShowStatus);
                 }
-                "OS" => { // F4
+                "OS" | "Os" => { // F4 (Linux, macOS application mode)
                     self.commands.push(Command::Quit);
                 }
-                "[15~" => { // F5
+                "[15~" | "Ot" => { // F5 (Linux, macOS application mode)
                     self.commands.push(Command::SelectDiskA);
                 }
-                "[17~" => { // F6
+                "[17~" | "Ou" => { // F6 (Linux, macOS application mode)
                     self.commands.push(Command::SelectDiskB);
                 }
-                "[18~" => { // F7
+                "[18~" | "Ov" => { // F7 (Linux, macOS application mode)
                     self.commands.push(Command::SaveMemory);
                 }
-                "[19~" => { // F8
+                "[19~" | "Ol" => { // F8 (Linux, macOS application mode)
                     self.commands.push(Command::TraceCPU);
                 }
                 "[3~" => {
                     // "Delete" key mapped to "DEL"
-                    self.key = 0x7f;
-                    self.key_available = true;
+                    self.key_buffer.push(0x7f);
                 }
                 "[2~" => {
                     // "Insert" key mapped to "LINEFEED"
-                    self.key = 0x0a;
-                    self.key_available = true;
+                    self.key_buffer.push(0x0a);
                 }
                 "[A" => {
                     // Up arrow mapped to ^K on the BIOS
-                    self.key = 0xf1; //0x0b;
-                    self.key_available = true;
+                    self.key_buffer.push(0xf1); //0x0b
                 }
                 "[B" => {
                     // Down arrow mapped to ^J on the BIOS
-                    self.key = 0xf2; //0x0a;
-                    self.key_available = true;
+                    self.key_buffer.push(0xf2); //0x0a
                 }
                 "[C" => {
                     // Right arrow mapped to ^L on the BIOS
-                    self.key = 0xf4; //0x0c;
-                    self.key_available = true;
+                    self.key_buffer.push(0xf4); //0x0c
                 }
                 "[D" => {
                     // Left arrow mapped to ^H on the BIOS
-                    self.key = 0xf3; //0x08;
-                    self.key_available = true;
+                    self.key_buffer.push(0xf3); //0x08
                 }
                 _ => {}
             }
             // Parse the rest
             self.parse_input(size-i, &input[i..]);
         } else if size >= 2 && input[0] == 0xc3 && input[1] == 0xb1 {
-            self.key = b':'; // ñ is on the : position
-            self.key_available = true;
+            self.key_buffer.push(b':'); // ñ is on the : position
+            self.parse_input(size-2, &input[2..]);
         } else if size >= 2 && input[0] == 0xc3 && input[1] == 0x91 {
-            self.key = b';'; // Ñ is on the ; position
-            self.key_available = true;
+            self.key_buffer.push(b';'); // Ñ is on the ; position
+            self.parse_input(size-2, &input[2..]);
         } else {
-            self.key = input[0];
-            self.key = match self.key {
+            let key = match input[0] {
                 0x7f => 0x08, // Backspace to ^H
-                _ => self.key & 0x7f,
+                k => k & 0x7f,
             };
-            self.key_available = true;
+            self.key_buffer.push(key);
             // Parse the rest
             self.parse_input(size-1, &input[1..]);
         }
