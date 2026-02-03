@@ -1,0 +1,986 @@
+   1:				; EMUTEST.COM - Emulator ROM and RAM diagnostics
+   2:				; Based on diag4.mac from Non-Linear Systems, Inc. (1983)
+   3:				; Implements proper ROM bank switching by relocating code to 0x8000
+   4:				; 
+   5:				; Test 3 (Video RAM) uses SY6545 CRTC transparent addressing:
+   6:				;   Port 0x1C: Register select (R18=addr_hi, R19=addr_lo)
+   7:				;   Port 0x1D: Register data
+   8:				;   Port 0x1F: VRAM data read/write + strobe control
+   9:				;   Wait for port 0x1C bit 7 = 1 (Update Ready) after strobe
+  10:				
+  11:				; CP/M BDOS calls
+  12:     -	0005          	bdos:           equ     5
+  13:     -	0002          	conout:         equ     2
+  14:     -	0009          	prtstr:         equ     9
+  15:				
+  16:				; Kaypro 4-84 ports
+  17:     -	0014          	bitport:        equ     014h
+  18:				
+  19:				; SY6545 CRTC ports and commands (from diag4.mac univ=true)
+  20:     -	001C          	crtc_reg:       equ     01Ch    ; CRTC register select
+  21:     -	001D          	crtc_data:      equ     01Dh    ; CRTC register data
+  22:     -	001F          	crtc_vram:      equ     01Fh    ; CRTC VRAM data / strobe
+  23:     -	001F          	strcmd:         equ     01Fh    ; Strobe command value
+  24:				
+  25:     -	0100          	        org     0100h
+  26:				
+  27:				; ============================================================================
+  28:				; Main program
+  29:				; ============================================================================
+  30:     -	0100          	start:
+  31:    0+10	0100  31FC04  	        ld      sp, stack
+  32:				
+  33:				        ; Print banner
+  34:   10+10	0103  11DC03  	        ld      de, msg_banner
+  35:   20+17	0106  CDB903  	        call    print
+  36:				
+  37:				        ; Test 1: ROM checksum
+  38:   37+17	0109  CD1901  	        call    rom_test
+  39:				
+  40:				        ; Test 2: RAM tests
+  41:   54+17	010C  CD6901  	        call    ram_test
+  42:				
+  43:				        ; Test 3: Video RAM test (SY6545 CRTC)
+  44:   71+17	010F  CD5002  	        call    vram_test
+  45:				
+  46:				        ; Print completion message
+  47:   88+10	0112  119F04  	        ld      de, msg_done
+  48:   98+17	0115  CDB903  	        call    print
+  49:				
+  50:				        ; Return to CP/M
+  51:  115+11	0118  C7      	        rst     0
+  52:				
+  53:				; ============================================================================
+  54:				; ROM Checksum Test
+  55:				; Copies test code to 0x8000, executes there to read ROM while banked in
+  56:				; ============================================================================
+  57:     -	0119          	rom_test:
+  58:  126+10	0119  112E04  	        ld      de, msg_rom
+  59:  136+17	011C  CDB903  	        call    print
+  60:				
+  61:				        ; Copy ROM test routine to 0x8000
+  62:  153+10	011F  213F01  	        ld      hl, rom_code_start
+  63:  163+10	0122  110080  	        ld      de, 08000h
+  64:  173+10	0125  012A00  	        ld      bc, rom_code_end - rom_code_start
+  65:  183+16+5	0128  EDB0    	        ldir
+  66:				
+  67:				        ; Jump to relocated code at 0x8000
+  68:				        ; It will calculate checksum and return here via rom_return
+  69:  199+10	012A  C30080  	        jp      08000h
+  70:				
+  71:     -	012D          	rom_return:
+  72:				        ; HL now contains the checksum (returned from relocated code)
+  73:  209+11	012D  E5      	        push    hl
+  74:				
+  75:				        ; Print checksum value
+  76:  220+10	012E  114204  	        ld      de, msg_chksum
+  77:  230+17	0131  CDB903  	        call    print
+  78:  247+10	0134  E1      	        pop     hl
+  79:  257+17	0135  CDBE03  	        call    print_hex16
+  80:				
+  81:  274+10	0138  11B904  	        ld      de, msg_crlf
+  82:  284+17	013B  CDB903  	        call    print
+  83:  301+10	013E  C9      	        ret
+  84:				
+  85:				; ============================================================================
+  86:				; ROM test code - gets copied to 0x8000 and executed there
+  87:				; This code must be position-independent or use absolute addresses at 0x8000
+  88:				; ============================================================================
+  89:     -	013F          	rom_code_start:
+  90:				        ; This code runs at 0x8000
+  91:				        
+  92:				        ; Save current bank state
+  93:  311+11	013F  DB14    	        in      a, (bitport)
+  94:  322+11	0141  F5      	        push    af
+  95:				
+  96:				        ; Switch to ROM bank (set bit 7)
+  97:  333+7	0142  F680    	        or      080h
+  98:  340+11	0144  D314    	        out     (bitport), a
+  99:				
+ 100:				        ; Calculate checksum of first 4KB (0x0000-0x0FFF)
+ 101:				        ; HL = checksum accumulator, DE = address pointer
+ 102:  351+10	0146  210000  	        ld      hl, 0
+ 103:  361+10	0149  110000  	        ld      de, 0
+ 104:  371+10	014C  010010  	        ld      bc, 01000h          ; 4KB = 0x1000 bytes
+ 105:				
+ 106:     -	014F          	rom_calc_loop:
+ 107:  381+7	014F  1A      	        ld      a, (de)             ; Read ROM byte
+ 108:  388+4	0150  85      	        add     a, l                ; Add to low byte of checksum
+ 109:  392+4	0151  6F      	        ld      l, a
+ 110:  396+7+5	0152  3001    	        jr      nc, rom_no_carry
+ 111:  403+4	0154  24      	        inc     h                   ; Carry to high byte
+ 112:     -	0155          	rom_no_carry:
+ 113:  407+6	0155  13      	        inc     de
+ 114:  413+6	0156  0B      	        dec     bc
+ 115:  419+4	0157  78      	        ld      a, b
+ 116:  423+4	0158  B1      	        or      c
+ 117:  427+7+5	0159  20F4    	        jr      nz, rom_calc_loop
+ 118:				
+ 119:				        ; Save checksum in IX (safe across bank switch)
+ 120:  434+11	015B  E5      	        push    hl
+ 121:  445+14	015C  DDE1    	        pop     ix
+ 122:				
+ 123:				        ; Switch back to RAM bank (clear bit 7)
+ 124:  459+10	015E  F1      	        pop     af                  ; Get saved port value
+ 125:  469+8	015F  CBBF    	        res     7, a
+ 126:  477+11	0161  D314    	        out     (bitport), a
+ 127:				
+ 128:				        ; Restore checksum to HL from IX
+ 129:  488+15	0163  DDE5    	        push    ix
+ 130:  503+10	0165  E1      	        pop     hl
+ 131:				
+ 132:				        ; Jump back to main code (absolute address)
+ 133:  513+10	0166  C32D01  	        jp      rom_return
+ 134:				
+ 135:     -	0169          	rom_code_end:
+ 136:				
+ 137:				; ============================================================================
+ 138:				; RAM Tests
+ 139:				; ============================================================================
+ 140:     -	0169          	ram_test:
+ 141:				        ; Test region 0x4000-0x7FFF
+ 142:  523+10	0169  114504  	        ld      de, msg_ram1
+ 143:  533+17	016C  CDB903  	        call    print
+ 144:				
+ 145:  550+10	016F  210040  	        ld      hl, 04000h
+ 146:  560+10	0172  11FF7F  	        ld      de, 07FFFh
+ 147:  570+17	0175  CDBD01  	        call    sliding_data
+ 148:  587+7+5	0178  2013    	        jr      nz, ram_fail1
+ 149:				
+ 150:  594+10	017A  210040  	        ld      hl, 04000h
+ 151:  604+10	017D  11FF7F  	        ld      de, 07FFFh
+ 152:  614+17	0180  CDFE01  	        call    address_data
+ 153:  631+7+5	0183  2008    	        jr      nz, ram_fail1
+ 154:				
+ 155:  638+10	0185  119104  	        ld      de, msg_pass
+ 156:  648+17	0188  CDB903  	        call    print
+ 157:  665+12	018B  1806    	        jr      ram_test2
+ 158:				
+ 159:     -	018D          	ram_fail1:
+ 160:  677+10	018D  119804  	        ld      de, msg_fail
+ 161:  687+17	0190  CDB903  	        call    print
+ 162:				
+ 163:     -	0193          	ram_test2:
+ 164:				        ; Test region 0x8000-0xBFFF
+ 165:  704+10	0193  115E04  	        ld      de, msg_ram2
+ 166:  714+17	0196  CDB903  	        call    print
+ 167:				
+ 168:  731+10	0199  210080  	        ld      hl, 08000h
+ 169:  741+10	019C  11FFBF  	        ld      de, 0BFFFh
+ 170:  751+17	019F  CDBD01  	        call    sliding_data
+ 171:  768+7+5	01A2  2012    	        jr      nz, ram_fail2
+ 172:				
+ 173:  775+10	01A4  210080  	        ld      hl, 08000h
+ 174:  785+10	01A7  11FFBF  	        ld      de, 0BFFFh
+ 175:  795+17	01AA  CDFE01  	        call    address_data
+ 176:  812+7+5	01AD  2007    	        jr      nz, ram_fail2
+ 177:				
+ 178:  819+10	01AF  119104  	        ld      de, msg_pass
+ 179:  829+17	01B2  CDB903  	        call    print
+ 180:  846+10	01B5  C9      	        ret
+ 181:				
+ 182:     -	01B6          	ram_fail2:
+ 183:  856+10	01B6  119804  	        ld      de, msg_fail
+ 184:  866+17	01B9  CDB903  	        call    print
+ 185:  883+10	01BC  C9      	        ret
+ 186:				
+ 187:				; ============================================================================
+ 188:				; Sliding Data Test
+ 189:				; Input: HL = start, DE = end
+ 190:				; Output: Z=pass, NZ=fail
+ 191:				; ============================================================================
+ 192:     -	01BD          	sliding_data:
+ 193:  893+11	01BD  E5      	        push    hl
+ 194:  904+11	01BE  D5      	        push    de
+ 195:				
+ 196:  915+7	01BF  0601    	        ld      b, 1            ; Initial pattern
+ 197:     -	01C1          	sd_outer:
+ 198:  922+7	01C1  0E08    	        ld      c, 8            ; 8 bit positions
+ 199:				
+ 200:     -	01C3          	sd_bit:
+ 201:  929+10	01C3  D1      	        pop     de
+ 202:  939+10	01C4  E1      	        pop     hl
+ 203:  949+11	01C5  E5      	        push    hl
+ 204:  960+11	01C6  D5      	        push    de
+ 205:				
+ 206:     -	01C7          	sd_write:
+ 207:  971+7	01C7  70      	        ld      (hl), b
+ 208:  978+4	01C8  7C      	        ld      a, h
+ 209:  982+4	01C9  BA      	        cp      d
+ 210:  986+7+5	01CA  2004    	        jr      nz, sd_winc
+ 211:  993+4	01CC  7D      	        ld      a, l
+ 212:  997+4	01CD  BB      	        cp      e
+ 213: 1001+7+5	01CE  2803    	        jr      z, sd_verify
+ 214:     -	01D0          	sd_winc:
+ 215: 1008+6	01D0  23      	        inc     hl
+ 216: 1014+12	01D1  18F4    	        jr      sd_write
+ 217:				
+ 218:     -	01D3          	sd_verify:
+ 219: 1026+10	01D3  D1      	        pop     de
+ 220: 1036+10	01D4  E1      	        pop     hl
+ 221: 1046+11	01D5  E5      	        push    hl
+ 222: 1057+11	01D6  D5      	        push    de
+ 223:				
+ 224:     -	01D7          	sd_read:
+ 225: 1068+7	01D7  7E      	        ld      a, (hl)
+ 226: 1075+4	01D8  B8      	        cp      b
+ 227: 1079+7+5	01D9  201D    	        jr      nz, sd_fail
+ 228: 1086+4	01DB  7C      	        ld      a, h
+ 229: 1090+4	01DC  BA      	        cp      d
+ 230: 1094+7+5	01DD  2004    	        jr      nz, sd_rinc
+ 231: 1101+4	01DF  7D      	        ld      a, l
+ 232: 1105+4	01E0  BB      	        cp      e
+ 233: 1109+7+5	01E1  2803    	        jr      z, sd_next
+ 234:     -	01E3          	sd_rinc:
+ 235: 1116+6	01E3  23      	        inc     hl
+ 236: 1122+12	01E4  18F1    	        jr      sd_read
+ 237:				
+ 238:     -	01E6          	sd_next:
+ 239: 1134+8	01E6  CB00    	        rlc     b
+ 240: 1142+4	01E8  0D      	        dec     c
+ 241: 1146+7+5	01E9  20D8    	        jr      nz, sd_bit
+ 242:				
+ 243: 1153+4	01EB  78      	        ld      a, b
+ 244: 1157+7	01EC  FE01    	        cp      1
+ 245: 1164+7+5	01EE  2004    	        jr      nz, sd_done
+ 246: 1171+7	01F0  06FE    	        ld      b, 0FEh
+ 247: 1178+12	01F2  18CD    	        jr      sd_outer
+ 248:				
+ 249:     -	01F4          	sd_done:
+ 250: 1190+10	01F4  D1      	        pop     de
+ 251: 1200+10	01F5  E1      	        pop     hl
+ 252: 1210+4	01F6  AF      	        xor     a
+ 253: 1214+10	01F7  C9      	        ret
+ 254:				
+ 255:     -	01F8          	sd_fail:
+ 256: 1224+10	01F8  D1      	        pop     de
+ 257: 1234+10	01F9  E1      	        pop     hl
+ 258: 1244+7	01FA  3E01    	        ld      a, 1
+ 259: 1251+4	01FC  B7      	        or      a
+ 260: 1255+10	01FD  C9      	        ret
+ 261:				
+ 262:				; ============================================================================
+ 263:				; Address Data Test
+ 264:				; Input: HL = start, DE = end
+ 265:				; Output: Z=pass, NZ=fail
+ 266:				; ============================================================================
+ 267:     -	01FE          	address_data:
+ 268: 1265+11	01FE  E5      	        push    hl
+ 269: 1276+11	01FF  D5      	        push    de
+ 270:				
+ 271:				        ; Write low bytes
+ 272: 1287+10	0200  D1      	        pop     de
+ 273: 1297+10	0201  E1      	        pop     hl
+ 274: 1307+11	0202  E5      	        push    hl
+ 275: 1318+11	0203  D5      	        push    de
+ 276:				
+ 277:     -	0204          	ad_wlo:
+ 278: 1329+7	0204  75      	        ld      (hl), l
+ 279: 1336+4	0205  7C      	        ld      a, h
+ 280: 1340+4	0206  BA      	        cp      d
+ 281: 1344+7+5	0207  2004    	        jr      nz, ad_wlinc
+ 282: 1351+4	0209  7D      	        ld      a, l
+ 283: 1355+4	020A  BB      	        cp      e
+ 284: 1359+7+5	020B  2803    	        jr      z, ad_vlo
+ 285:     -	020D          	ad_wlinc:
+ 286: 1366+6	020D  23      	        inc     hl
+ 287: 1372+12	020E  18F4    	        jr      ad_wlo
+ 288:				
+ 289:     -	0210          	ad_vlo:
+ 290:				        ; Verify low bytes
+ 291: 1384+10	0210  D1      	        pop     de
+ 292: 1394+10	0211  E1      	        pop     hl
+ 293: 1404+11	0212  E5      	        push    hl
+ 294: 1415+11	0213  D5      	        push    de
+ 295:				
+ 296:     -	0214          	ad_rlo:
+ 297: 1426+7	0214  7E      	        ld      a, (hl)
+ 298: 1433+4	0215  BD      	        cp      l
+ 299: 1437+7+5	0216  2032    	        jr      nz, ad_fail
+ 300: 1444+4	0218  7C      	        ld      a, h
+ 301: 1448+4	0219  BA      	        cp      d
+ 302: 1452+7+5	021A  2004    	        jr      nz, ad_rlinc
+ 303: 1459+4	021C  7D      	        ld      a, l
+ 304: 1463+4	021D  BB      	        cp      e
+ 305: 1467+7+5	021E  2803    	        jr      z, ad_whi
+ 306:     -	0220          	ad_rlinc:
+ 307: 1474+6	0220  23      	        inc     hl
+ 308: 1480+12	0221  18F1    	        jr      ad_rlo
+ 309:				
+ 310:     -	0223          	ad_whi:
+ 311:				        ; Write high bytes
+ 312: 1492+10	0223  D1      	        pop     de
+ 313: 1502+10	0224  E1      	        pop     hl
+ 314: 1512+11	0225  E5      	        push    hl
+ 315: 1523+11	0226  D5      	        push    de
+ 316:				
+ 317:     -	0227          	ad_wh:
+ 318: 1534+7	0227  74      	        ld      (hl), h
+ 319: 1541+4	0228  7C      	        ld      a, h
+ 320: 1545+4	0229  BA      	        cp      d
+ 321: 1549+7+5	022A  2004    	        jr      nz, ad_whinc
+ 322: 1556+4	022C  7D      	        ld      a, l
+ 323: 1560+4	022D  BB      	        cp      e
+ 324: 1564+7+5	022E  2803    	        jr      z, ad_vhi
+ 325:     -	0230          	ad_whinc:
+ 326: 1571+6	0230  23      	        inc     hl
+ 327: 1577+12	0231  18F4    	        jr      ad_wh
+ 328:				
+ 329:     -	0233          	ad_vhi:
+ 330:				        ; Verify high bytes
+ 331: 1589+10	0233  D1      	        pop     de
+ 332: 1599+10	0234  E1      	        pop     hl
+ 333: 1609+11	0235  E5      	        push    hl
+ 334: 1620+11	0236  D5      	        push    de
+ 335:				
+ 336:     -	0237          	ad_rhi:
+ 337: 1631+7	0237  7E      	        ld      a, (hl)
+ 338: 1638+4	0238  BC      	        cp      h
+ 339: 1642+7+5	0239  200F    	        jr      nz, ad_fail
+ 340: 1649+4	023B  7C      	        ld      a, h
+ 341: 1653+4	023C  BA      	        cp      d
+ 342: 1657+7+5	023D  2004    	        jr      nz, ad_rhinc
+ 343: 1664+4	023F  7D      	        ld      a, l
+ 344: 1668+4	0240  BB      	        cp      e
+ 345: 1672+7+5	0241  2803    	        jr      z, ad_done
+ 346:     -	0243          	ad_rhinc:
+ 347: 1679+6	0243  23      	        inc     hl
+ 348: 1685+12	0244  18F1    	        jr      ad_rhi
+ 349:				
+ 350:     -	0246          	ad_done:
+ 351: 1697+10	0246  D1      	        pop     de
+ 352: 1707+10	0247  E1      	        pop     hl
+ 353: 1717+4	0248  AF      	        xor     a
+ 354: 1721+10	0249  C9      	        ret
+ 355:				
+ 356:     -	024A          	ad_fail:
+ 357: 1731+10	024A  D1      	        pop     de
+ 358: 1741+10	024B  E1      	        pop     hl
+ 359: 1751+7	024C  3E01    	        ld      a, 1
+ 360: 1758+4	024E  B7      	        or      a
+ 361: 1762+10	024F  C9      	        ret
+ 362:				
+ 363:				; ============================================================================
+ 364:				; Video RAM Test (SY6545 CRTC transparent addressing)
+ 365:				; Tests 2KB of VRAM at 0x0000-0x07FF via CRTC registers
+ 366:				; ============================================================================
+ 367:     -	0250          	vram_test:
+ 368: 1772+10	0250  117704  	        ld      de, msg_vram
+ 369: 1782+17	0253  CDB903  	        call    print
+ 370:				
+ 371:				        ; Save current VRAM contents to backup buffer at 0x9000
+ 372: 1799+10	0256  210000  	        ld      hl, 0               ; VRAM address
+ 373: 1809+10	0259  110090  	        ld      de, 09000h          ; Backup buffer
+ 374: 1819+10	025C  010008  	        ld      bc, 0800h           ; 2KB
+ 375:     -	025F          	vram_save:
+ 376: 1829+11	025F  C5      	        push    bc
+ 377: 1840+11	0260  D5      	        push    de
+ 378: 1851+17	0261  CD6F03  	        call    crtc_read           ; Read VRAM[HL] -> A
+ 379: 1868+10	0264  D1      	        pop     de
+ 380: 1878+7	0265  12      	        ld      (de), a             ; Save to backup
+ 381: 1885+6	0266  13      	        inc     de
+ 382: 1891+6	0267  23      	        inc     hl
+ 383: 1897+10	0268  C1      	        pop     bc
+ 384: 1907+6	0269  0B      	        dec     bc
+ 385: 1913+4	026A  78      	        ld      a, b
+ 386: 1917+4	026B  B1      	        or      c
+ 387: 1921+7+5	026C  20F1    	        jr      nz, vram_save
+ 388:				
+ 389:				        ; Perform sliding-data test on VRAM 0x0000-0x07FF
+ 390: 1928+10	026E  210000  	        ld      hl, 0
+ 391: 1938+10	0271  11FF07  	        ld      de, 07FFh
+ 392: 1948+17	0274  CDB102  	        call    vram_sliding
+ 393: 1965+7+5	0277  2015    	        jr      nz, vram_fail
+ 394:				
+ 395:				        ; Perform address-data test on VRAM 0x0000-0x07FF
+ 396: 1972+10	0279  210000  	        ld      hl, 0
+ 397: 1982+10	027C  11FF07  	        ld      de, 07FFh
+ 398: 1992+17	027F  CD0303  	        call    vram_address
+ 399: 2009+7+5	0282  200A    	        jr      nz, vram_fail
+ 400:				
+ 401:				        ; Restore VRAM contents from backup
+ 402: 2016+17	0284  CD9802  	        call    vram_restore
+ 403:				
+ 404: 2033+10	0287  119104  	        ld      de, msg_pass
+ 405: 2043+17	028A  CDB903  	        call    print
+ 406: 2060+10	028D  C9      	        ret
+ 407:				
+ 408:     -	028E          	vram_fail:
+ 409:				        ; Restore VRAM contents even on failure
+ 410: 2070+17	028E  CD9802  	        call    vram_restore
+ 411:				
+ 412: 2087+10	0291  119804  	        ld      de, msg_fail
+ 413: 2097+17	0294  CDB903  	        call    print
+ 414: 2114+10	0297  C9      	        ret
+ 415:				
+ 416:     -	0298          	vram_restore:
+ 417: 2124+10	0298  210000  	        ld      hl, 0               ; VRAM address
+ 418: 2134+10	029B  110090  	        ld      de, 09000h          ; Backup buffer
+ 419: 2144+10	029E  010008  	        ld      bc, 0800h           ; 2KB
+ 420:     -	02A1          	vram_rest_loop:
+ 421: 2154+11	02A1  C5      	        push    bc
+ 422: 2165+11	02A2  E5      	        push    hl
+ 423: 2176+7	02A3  1A      	        ld      a, (de)             ; Get from backup
+ 424: 2183+17	02A4  CD9003  	        call    crtc_write          ; Write VRAM[HL] <- A
+ 425: 2200+10	02A7  E1      	        pop     hl
+ 426: 2210+6	02A8  23      	        inc     hl
+ 427: 2216+6	02A9  13      	        inc     de
+ 428: 2222+10	02AA  C1      	        pop     bc
+ 429: 2232+6	02AB  0B      	        dec     bc
+ 430: 2238+4	02AC  78      	        ld      a, b
+ 431: 2242+4	02AD  B1      	        or      c
+ 432: 2246+7+5	02AE  20F1    	        jr      nz, vram_rest_loop
+ 433: 2253+10	02B0  C9      	        ret
+ 434:				
+ 435:				; ============================================================================
+ 436:				; VRAM Sliding Data Test
+ 437:				; Input: HL = start VRAM addr, DE = end VRAM addr
+ 438:				; Output: Z=pass, NZ=fail
+ 439:				; ============================================================================
+ 440:     -	02B1          	vram_sliding:
+ 441: 2263+11	02B1  E5      	        push    hl
+ 442: 2274+11	02B2  D5      	        push    de
+ 443:				
+ 444: 2285+7	02B3  0601    	        ld      b, 1                ; Initial pattern 0x01
+ 445:     -	02B5          	vsd_outer:
+ 446: 2292+7	02B5  0E08    	        ld      c, 8                ; 8 bit positions
+ 447:				
+ 448:     -	02B7          	vsd_bit:
+ 449: 2299+10	02B7  D1      	        pop     de
+ 450: 2309+10	02B8  E1      	        pop     hl
+ 451: 2319+11	02B9  E5      	        push    hl
+ 452: 2330+11	02BA  D5      	        push    de
+ 453:				
+ 454:				        ; Write pattern B to all VRAM locations
+ 455:     -	02BB          	vsd_write:
+ 456: 2341+11	02BB  C5      	        push    bc
+ 457: 2352+11	02BC  D5      	        push    de
+ 458: 2363+11	02BD  E5      	        push    hl
+ 459: 2374+4	02BE  78      	        ld      a, b                ; Pattern to write
+ 460: 2378+17	02BF  CD9003  	        call    crtc_write          ; Write to VRAM[HL]
+ 461: 2395+10	02C2  E1      	        pop     hl
+ 462: 2405+10	02C3  D1      	        pop     de
+ 463: 2415+10	02C4  C1      	        pop     bc
+ 464:				        ; Check if HL == DE (end)
+ 465: 2425+4	02C5  7C      	        ld      a, h
+ 466: 2429+4	02C6  BA      	        cp      d
+ 467: 2433+7+5	02C7  2004    	        jr      nz, vsd_winc
+ 468: 2440+4	02C9  7D      	        ld      a, l
+ 469: 2444+4	02CA  BB      	        cp      e
+ 470: 2448+7+5	02CB  2803    	        jr      z, vsd_verify
+ 471:     -	02CD          	vsd_winc:
+ 472: 2455+6	02CD  23      	        inc     hl
+ 473: 2461+12	02CE  18EB    	        jr      vsd_write
+ 474:				
+ 475:     -	02D0          	vsd_verify:
+ 476:				        ; Verify pattern B in all VRAM locations
+ 477: 2473+10	02D0  D1      	        pop     de
+ 478: 2483+10	02D1  E1      	        pop     hl
+ 479: 2493+11	02D2  E5      	        push    hl
+ 480: 2504+11	02D3  D5      	        push    de
+ 481:				
+ 482:     -	02D4          	vsd_read:
+ 483: 2515+11	02D4  C5      	        push    bc
+ 484: 2526+11	02D5  D5      	        push    de
+ 485: 2537+11	02D6  E5      	        push    hl
+ 486: 2548+17	02D7  CD6F03  	        call    crtc_read           ; Read VRAM[HL] -> A
+ 487: 2565+10	02DA  E1      	        pop     hl
+ 488: 2575+10	02DB  D1      	        pop     de
+ 489: 2585+10	02DC  C1      	        pop     bc                  ; Restore pattern (B) and counter (C)
+ 490: 2595+4	02DD  B8      	        cp      b                   ; Compare read value (A) with expected pattern (B)
+ 491: 2599+7+5	02DE  201D    	        jr      nz, vsd_fail
+ 492:				        ; Check if HL == DE (end)
+ 493: 2606+4	02E0  7C      	        ld      a, h
+ 494: 2610+4	02E1  BA      	        cp      d
+ 495: 2614+7+5	02E2  2004    	        jr      nz, vsd_rinc
+ 496: 2621+4	02E4  7D      	        ld      a, l
+ 497: 2625+4	02E5  BB      	        cp      e
+ 498: 2629+7+5	02E6  2803    	        jr      z, vsd_next
+ 499:     -	02E8          	vsd_rinc:
+ 500: 2636+6	02E8  23      	        inc     hl
+ 501: 2642+12	02E9  18E9    	        jr      vsd_read
+ 502:				
+ 503:     -	02EB          	vsd_next:
+ 504: 2654+8	02EB  CB00    	        rlc     b                   ; Rotate pattern left
+ 505: 2662+4	02ED  0D      	        dec     c                   ; Decrement bit counter
+ 506: 2666+7+5	02EE  20C7    	        jr      nz, vsd_bit
+ 507:				
+ 508:				        ; After 8 rotations of 0x01, switch to 0xFE
+ 509: 2673+4	02F0  78      	        ld      a, b
+ 510: 2677+7	02F1  FE01    	        cp      1
+ 511: 2684+7+5	02F3  2004    	        jr      nz, vsd_done
+ 512: 2691+7	02F5  06FE    	        ld      b, 0FEh
+ 513: 2698+12	02F7  18BC    	        jr      vsd_outer
+ 514:				
+ 515:     -	02F9          	vsd_done:
+ 516: 2710+10	02F9  D1      	        pop     de
+ 517: 2720+10	02FA  E1      	        pop     hl
+ 518: 2730+4	02FB  AF      	        xor     a                   ; Z=pass
+ 519: 2734+10	02FC  C9      	        ret
+ 520:				
+ 521:     -	02FD          	vsd_fail:
+ 522: 2744+10	02FD  D1      	        pop     de
+ 523: 2754+10	02FE  E1      	        pop     hl
+ 524: 2764+7	02FF  3E01    	        ld      a, 1
+ 525: 2771+4	0301  B7      	        or      a                   ; NZ=fail
+ 526: 2775+10	0302  C9      	        ret
+ 527:				
+ 528:				; ============================================================================
+ 529:				; VRAM Address Data Test
+ 530:				; Input: HL = start VRAM addr, DE = end VRAM addr
+ 531:				; Output: Z=pass, NZ=fail
+ 532:				; ============================================================================
+ 533:     -	0303          	vram_address:
+ 534: 2785+11	0303  E5      	        push    hl
+ 535: 2796+11	0304  D5      	        push    de
+ 536:				
+ 537:				        ; Write low byte of address to each location
+ 538: 2807+10	0305  D1      	        pop     de
+ 539: 2817+10	0306  E1      	        pop     hl
+ 540: 2827+11	0307  E5      	        push    hl
+ 541: 2838+11	0308  D5      	        push    de
+ 542:				
+ 543:     -	0309          	vad_wlo:
+ 544: 2849+11	0309  D5      	        push    de
+ 545: 2860+11	030A  E5      	        push    hl
+ 546: 2871+4	030B  7D      	        ld      a, l                ; Low byte of address
+ 547: 2875+17	030C  CD9003  	        call    crtc_write          ; Write to VRAM[HL]
+ 548: 2892+10	030F  E1      	        pop     hl
+ 549: 2902+10	0310  D1      	        pop     de
+ 550:				        ; Check if HL == DE
+ 551: 2912+4	0311  7C      	        ld      a, h
+ 552: 2916+4	0312  BA      	        cp      d
+ 553: 2920+7+5	0313  2004    	        jr      nz, vad_wlinc
+ 554: 2927+4	0315  7D      	        ld      a, l
+ 555: 2931+4	0316  BB      	        cp      e
+ 556: 2935+7+5	0317  2803    	        jr      z, vad_vlo
+ 557:     -	0319          	vad_wlinc:
+ 558: 2942+6	0319  23      	        inc     hl
+ 559: 2948+12	031A  18ED    	        jr      vad_wlo
+ 560:				
+ 561:     -	031C          	vad_vlo:
+ 562:				        ; Verify low bytes
+ 563: 2960+10	031C  D1      	        pop     de
+ 564: 2970+10	031D  E1      	        pop     hl
+ 565: 2980+11	031E  E5      	        push    hl
+ 566: 2991+11	031F  D5      	        push    de
+ 567:				
+ 568:     -	0320          	vad_rlo:
+ 569: 3002+11	0320  D5      	        push    de
+ 570: 3013+11	0321  E5      	        push    hl
+ 571: 3024+17	0322  CD6F03  	        call    crtc_read           ; Read VRAM[HL] -> A
+ 572: 3041+10	0325  E1      	        pop     hl
+ 573: 3051+10	0326  D1      	        pop     de
+ 574: 3061+4	0327  BD      	        cp      l                   ; Compare with expected (low byte of addr)
+ 575: 3065+7+5	0328  203F    	        jr      nz, vad_fail
+ 576:				        ; Check if HL == DE
+ 577: 3072+4	032A  7C      	        ld      a, h
+ 578: 3076+4	032B  BA      	        cp      d
+ 579: 3080+7+5	032C  2004    	        jr      nz, vad_rlinc
+ 580: 3087+4	032E  7D      	        ld      a, l
+ 581: 3091+4	032F  BB      	        cp      e
+ 582: 3095+7+5	0330  2803    	        jr      z, vad_whi
+ 583:     -	0332          	vad_rlinc:
+ 584: 3102+6	0332  23      	        inc     hl
+ 585: 3108+12	0333  18EB    	        jr      vad_rlo
+ 586:				
+ 587:     -	0335          	vad_whi:
+ 588:				        ; Write high byte of address to each location
+ 589: 3120+10	0335  D1      	        pop     de
+ 590: 3130+10	0336  E1      	        pop     hl
+ 591: 3140+11	0337  E5      	        push    hl
+ 592: 3151+11	0338  D5      	        push    de
+ 593:				
+ 594:     -	0339          	vad_wh:
+ 595: 3162+11	0339  D5      	        push    de
+ 596: 3173+11	033A  E5      	        push    hl
+ 597: 3184+4	033B  7C      	        ld      a, h                ; High byte of address
+ 598: 3188+17	033C  CD9003  	        call    crtc_write          ; Write to VRAM[HL]
+ 599: 3205+10	033F  E1      	        pop     hl
+ 600: 3215+10	0340  D1      	        pop     de
+ 601:				        ; Check if HL == DE
+ 602: 3225+4	0341  7C      	        ld      a, h
+ 603: 3229+4	0342  BA      	        cp      d
+ 604: 3233+7+5	0343  2004    	        jr      nz, vad_whinc
+ 605: 3240+4	0345  7D      	        ld      a, l
+ 606: 3244+4	0346  BB      	        cp      e
+ 607: 3248+7+5	0347  2803    	        jr      z, vad_vhi
+ 608:     -	0349          	vad_whinc:
+ 609: 3255+6	0349  23      	        inc     hl
+ 610: 3261+12	034A  18ED    	        jr      vad_wh
+ 611:				
+ 612:     -	034C          	vad_vhi:
+ 613:				        ; Verify high bytes
+ 614: 3273+10	034C  D1      	        pop     de
+ 615: 3283+10	034D  E1      	        pop     hl
+ 616: 3293+11	034E  E5      	        push    hl
+ 617: 3304+11	034F  D5      	        push    de
+ 618:				
+ 619:     -	0350          	vad_rhi:
+ 620: 3315+11	0350  D5      	        push    de
+ 621: 3326+11	0351  E5      	        push    hl
+ 622: 3337+17	0352  CD6F03  	        call    crtc_read           ; Read VRAM[HL] -> A
+ 623: 3354+10	0355  E1      	        pop     hl
+ 624: 3364+10	0356  D1      	        pop     de
+ 625: 3374+4	0357  BC      	        cp      h                   ; Compare with expected (high byte of addr)
+ 626: 3378+7+5	0358  200F    	        jr      nz, vad_fail
+ 627:				        ; Check if HL == DE
+ 628: 3385+4	035A  7C      	        ld      a, h
+ 629: 3389+4	035B  BA      	        cp      d
+ 630: 3393+7+5	035C  2004    	        jr      nz, vad_rhinc
+ 631: 3400+4	035E  7D      	        ld      a, l
+ 632: 3404+4	035F  BB      	        cp      e
+ 633: 3408+7+5	0360  2803    	        jr      z, vad_done
+ 634:     -	0362          	vad_rhinc:
+ 635: 3415+6	0362  23      	        inc     hl
+ 636: 3421+12	0363  18EB    	        jr      vad_rhi
+ 637:				
+ 638:     -	0365          	vad_done:
+ 639: 3433+10	0365  D1      	        pop     de
+ 640: 3443+10	0366  E1      	        pop     hl
+ 641: 3453+4	0367  AF      	        xor     a                   ; Z=pass
+ 642: 3457+10	0368  C9      	        ret
+ 643:				
+ 644:     -	0369          	vad_fail:
+ 645: 3467+10	0369  D1      	        pop     de
+ 646: 3477+10	036A  E1      	        pop     hl
+ 647: 3487+7	036B  3E01    	        ld      a, 1
+ 648: 3494+4	036D  B7      	        or      a                   ; NZ=fail
+ 649: 3498+10	036E  C9      	        ret
+ 650:				
+ 651:				; ============================================================================
+ 652:				; CRTC VRAM Read - Read byte from VRAM via SY6545 transparent addressing
+ 653:				; Input: HL = VRAM address (0x0000-0x07FF)
+ 654:				; Output: A = byte read
+ 655:				; Clobbers: BC
+ 656:				; 
+ 657:				; Protocol (from diag4.mac cr4/cr6):
+ 658:				;   1. OUT 0x1C, 0x12       (select R18 - Update Address High)
+ 659:				;   2. OUT 0x1D, H          (write high byte)
+ 660:				;   3. OUT 0x1C, 0x13       (select R19 - Update Address Low)  
+ 661:				;   4. OUT 0x1D, L          (write low byte)
+ 662:				;   5. OUT 0x1C, 0x1F       (strobe command)
+ 663:				;   6. Wait for IN 0x1C bit 7 = 1 (Update Ready)
+ 664:				;   7. IN 0x1F              (read VRAM data)
+ 665:				; ============================================================================
+ 666:     -	036F          	crtc_read:
+ 667: 3508+11	036F  E5      	        push    hl
+ 668:				        ; Mask address to 11 bits (0-0x7FF)
+ 669: 3519+4	0370  7C      	        ld      a, h
+ 670: 3523+7	0371  E607    	        and     07h
+ 671: 3530+4	0373  67      	        ld      h, a
+ 672:				
+ 673:				        ; Select R18 and write high byte
+ 674: 3534+7	0374  3E12    	        ld      a, 012h             ; R18 - Update Address High
+ 675: 3541+11	0376  D31C    	        out     (crtc_reg), a
+ 676: 3552+4	0378  7C      	        ld      a, h
+ 677: 3556+11	0379  D31D    	        out     (crtc_data), a
+ 678:				
+ 679:				        ; Select R19 and write low byte
+ 680: 3567+7	037B  3E13    	        ld      a, 013h             ; R19 - Update Address Low
+ 681: 3574+11	037D  D31C    	        out     (crtc_reg), a
+ 682: 3585+4	037F  7D      	        ld      a, l
+ 683: 3589+11	0380  D31D    	        out     (crtc_data), a
+ 684:				
+ 685:				        ; Send strobe command
+ 686: 3600+7	0382  3E1F    	        ld      a, strcmd
+ 687: 3607+11	0384  D31C    	        out     (crtc_reg), a
+ 688:				
+ 689:				        ; Wait for Update Ready (bit 7 of port 0x1C)
+ 690:     -	0386          	crtc_read_wait:
+ 691: 3618+11	0386  DB1C    	        in      a, (crtc_reg)
+ 692: 3629+4	0388  B7      	        or      a
+ 693: 3633+10	0389  F28603  	        jp      p, crtc_read_wait   ; Loop while bit 7 = 0
+ 694:				
+ 695:				        ; Read VRAM data
+ 696: 3643+11	038C  DB1F    	        in      a, (crtc_vram)
+ 697:				
+ 698: 3654+10	038E  E1      	        pop     hl
+ 699: 3664+10	038F  C9      	        ret
+ 700:				
+ 701:				; ============================================================================
+ 702:				; CRTC VRAM Write - Write byte to VRAM via SY6545 transparent addressing
+ 703:				; Input: HL = VRAM address (0x0000-0x07FF), A = byte to write
+ 704:				; Clobbers: BC
+ 705:				;
+ 706:				; Protocol (from diag4.mac cr5/cr6):
+ 707:				;   1-6. Same as read (set address and strobe)
+ 708:				;   7. OUT 0x1F, A          (write VRAM data)
+ 709:				;   8. Wait for IN 0x1C bit 7 = 1 (write complete)
+ 710:				; ============================================================================
+ 711:     -	0390          	crtc_write:
+ 712: 3674+11	0390  E5      	        push    hl
+ 713: 3685+11	0391  F5      	        push    af                  ; Save data byte
+ 714:				        ; Mask address to 11 bits (0-0x7FF)
+ 715: 3696+4	0392  7C      	        ld      a, h
+ 716: 3700+7	0393  E607    	        and     07h
+ 717: 3707+4	0395  67      	        ld      h, a
+ 718:				
+ 719:				        ; Select R18 and write high byte
+ 720: 3711+7	0396  3E12    	        ld      a, 012h             ; R18 - Update Address High
+ 721: 3718+11	0398  D31C    	        out     (crtc_reg), a
+ 722: 3729+4	039A  7C      	        ld      a, h
+ 723: 3733+11	039B  D31D    	        out     (crtc_data), a
+ 724:				
+ 725:				        ; Select R19 and write low byte
+ 726: 3744+7	039D  3E13    	        ld      a, 013h             ; R19 - Update Address Low
+ 727: 3751+11	039F  D31C    	        out     (crtc_reg), a
+ 728: 3762+4	03A1  7D      	        ld      a, l
+ 729: 3766+11	03A2  D31D    	        out     (crtc_data), a
+ 730:				
+ 731:				        ; Send strobe command
+ 732: 3777+7	03A4  3E1F    	        ld      a, strcmd
+ 733: 3784+11	03A6  D31C    	        out     (crtc_reg), a
+ 734:				
+ 735:				        ; Wait for Update Ready (bit 7 of port 0x1C)
+ 736:     -	03A8          	crtc_write_wait1:
+ 737: 3795+11	03A8  DB1C    	        in      a, (crtc_reg)
+ 738: 3806+4	03AA  B7      	        or      a
+ 739: 3810+10	03AB  F2A803  	        jp      p, crtc_write_wait1 ; Loop while bit 7 = 0
+ 740:				
+ 741:				        ; Write VRAM data
+ 742: 3820+10	03AE  F1      	        pop     af                  ; Restore data byte
+ 743: 3830+11	03AF  D31F    	        out     (crtc_vram), a
+ 744:				
+ 745:				        ; Wait for write complete
+ 746:     -	03B1          	crtc_write_wait2:
+ 747: 3841+11	03B1  DB1C    	        in      a, (crtc_reg)
+ 748: 3852+4	03B3  B7      	        or      a
+ 749: 3856+10	03B4  F2B103  	        jp      p, crtc_write_wait2 ; Loop while bit 7 = 0
+ 750:				
+ 751: 3866+10	03B7  E1      	        pop     hl
+ 752: 3876+10	03B8  C9      	        ret
+ 753:				
+ 754:				; ============================================================================
+ 755:				; Utility routines
+ 756:				; ============================================================================
+ 757:				
+ 758:     -	03B9          	print:
+ 759: 3886+7	03B9  0E09    	        ld      c, prtstr
+ 760: 3893+10	03BB  C30500  	        jp      bdos
+ 761:				
+ 762:     -	03BE          	print_hex16:
+ 763: 3903+4	03BE  7C      	        ld      a, h
+ 764: 3907+17	03BF  CDC303  	        call    print_hex8
+ 765: 3924+4	03C2  7D      	        ld      a, l
+ 766:				
+ 767:     -	03C3          	print_hex8:
+ 768: 3928+11	03C3  F5      	        push    af
+ 769: 3939+4	03C4  0F      	        rrca
+ 770: 3943+4	03C5  0F      	        rrca
+ 771: 3947+4	03C6  0F      	        rrca
+ 772: 3951+4	03C7  0F      	        rrca
+ 773: 3955+17	03C8  CDCC03  	        call    print_nibble
+ 774: 3972+10	03CB  F1      	        pop     af
+ 775:				
+ 776:     -	03CC          	print_nibble:
+ 777: 3982+7	03CC  E60F    	        and     00Fh
+ 778: 3989+7	03CE  C630    	        add     a, 030h
+ 779: 3996+7	03D0  FE3A    	        cp      03Ah
+ 780: 4003+7+5	03D2  3802    	        jr      c, pn_out
+ 781: 4010+7	03D4  C607    	        add     a, 7
+ 782:     -	03D6          	pn_out:
+ 783: 4017+4	03D6  5F      	        ld      e, a
+ 784: 4021+7	03D7  0E02    	        ld      c, conout
+ 785: 4028+10	03D9  C30500  	        jp      bdos
+ 786:				
+ 787:				; ============================================================================
+ 788:				; Messages
+ 789:				; ============================================================================
+ 790:     -	03DC          	msg_banner:
+ 791:     -	03DC  0D0A    	        db      13, 10
+ 792:     -	03DE  3D3D3D20	        db      "=== izkaypro Emulator Diagnostics ===", 13, 10
+	              697A6B61
+	              7970726F
+	              20456D75
+	              6C61746F
+	              72204469
+	              61676E6F
+	              73746963
+	              73203D3D
+	              3D0D0A
+ 793:     -	0405  42617365	        db      "Based on diag4.mac (c) 1983 NLS Inc.", 13, 10
+	              64206F6E
+	              20646961
+	              67342E6D
+	              61632028
+	              63292031
+	              39383320
+	              4E4C5320
+	              496E632E
+	              0D0A
+ 794:     -	042B  0D0A24  	        db      13, 10, "$"
+ 795:				
+ 796:     -	042E          	msg_rom:
+ 797:     -	042E  524F4D20	        db      "ROM Checksum Test: $"
+	              43686563
+	              6B73756D
+	              20546573
+	              743A2024
+ 798:				
+ 799:     -	0442          	msg_chksum:
+ 800:     -	0442  307824  	        db      "0x$"
+ 801:				
+ 802:     -	0445          	msg_ram1:
+ 803:     -	0445  52414D20	        db      "RAM Test 0x4000-0x7FFF: $"
+	              54657374
+	              20307834
+	              3030302D
+	              30783746
+	              46463A20
+	              24
+ 804:				
+ 805:     -	045E          	msg_ram2:
+ 806:     -	045E  52414D20	        db      "RAM Test 0x8000-0xBFFF: $"
+	              54657374
+	              20307838
+	              3030302D
+	              30784246
+	              46463A20
+	              24
+ 807:				
+ 808:     -	0477          	msg_vram:
+ 809:     -	0477  5652414D	        db      "VRAM Test 0x0000-0x07FF: $"
+	              20546573
+	              74203078
+	              30303030
+	              2D307830
+	              3746463A
+	              2024
+ 810:				
+ 811:     -	0491          	msg_pass:
+ 812:     -	0491  50415353	        db      "PASS", 13, 10, "$"
+	              0D0A24
+ 813:				
+ 814:     -	0498          	msg_fail:
+ 815:     -	0498  4641494C	        db      "FAIL", 13, 10, "$"
+	              0D0A24
+ 816:				
+ 817:     -	049F          	msg_done:
+ 818:     -	049F  0D0A    	        db      13, 10
+ 819:     -	04A1  44696167	        db      "Diagnostics complete.", 13, 10, "$"
+	              6E6F7374
+	              69637320
+	              636F6D70
+	              6C657465
+	              2E0D0A24
+ 820:				
+ 821:     -	04B9          	msg_crlf:
+ 822:     -	04B9  0D0A24  	        db      13, 10, "$"
+ 823:				
+ 824:				; ============================================================================
+ 825:				; Stack
+ 826:				; ============================================================================
+ 827:     -	04BC          	        ds      64
+ 828:     -	04FC          	stack:
+ 829:				
+ 830:     -	04FC          	        end
+
+
+
+Statistics:
+
+     4	passes
+     0	jr promotions
+    95	symbols
+   956	bytes
+
+
+
+Symbol Table:
+
+ad_done          246      582
+ad_fail          24A      586
+ad_rhi           237      567
+ad_rhinc         243      579
+ad_rlinc         220      544
+ad_rlo           214      532
+ad_vhi           233      563
+ad_vlo           210      528
+ad_wh            227      551
+ad_whi           223      547
+ad_whinc         230      560
+ad_wlinc         20D      525
+ad_wlo           204      516
+address_data     1FE      510
+bdos           =05        5
+bitport        =14        20
+conout         =02        2
+crtc_data      =1D        29
+crtc_read        36F      879
+crtc_read_wait   386      902
+crtc_reg       =1C        28
+crtc_vram      =1F        31
+crtc_write       390      912
+crtc_write_wait1  3A8      936
+crtc_write_wait2  3B1      945
+msg_banner       3DC      988
+msg_chksum       442      1090
+msg_crlf         4B9      1209
+msg_done         49F      1183
+msg_fail         498      1176
+msg_pass         491      1169
+msg_ram1         445      1093
+msg_ram2         45E      1118
+msg_rom          42E      1070
+msg_vram         477      1143
+pn_out           3D6      982
+print            3B9      953
+print_hex16      3BE      958
+print_hex8       3C3      963
+print_nibble     3CC      972
+prtstr         =09        9
+ram_fail1        18D      397
+ram_fail2        1B6      438
+ram_test         169      361
+ram_test2        193      403
+rom_calc_loop    14F      335
+rom_code_end     169      361
+rom_code_start   13F      319
+rom_no_carry     155      341
+rom_return       12D      301
+rom_test         119      281
+sd_bit           1C3      451
+sd_done          1F4      500
+sd_fail          1F8      504
+sd_next          1E6      486
+sd_outer         1C1      449
+sd_read          1D7      471
+sd_rinc          1E3      483
+sd_verify        1D3      467
+sd_winc          1D0      464
+sd_write         1C7      455
+sliding_data     1BD      445
+stack            4FC      1276
+start            100      256
+strcmd         =1F        31
+vad_done         365      869
+vad_fail         369      873
+vad_rhi          350      848
+vad_rhinc        362      866
+vad_rlinc        332      818
+vad_rlo          320      800
+vad_vhi          34C      844
+vad_vlo          31C      796
+vad_wh           339      825
+vad_whi          335      821
+vad_whinc        349      841
+vad_wlinc        319      793
+vad_wlo          309      777
+vram_address     303      771
+vram_fail        28E      654
+vram_rest_loop   2A1      673
+vram_restore     298      664
+vram_save        25F      607
+vram_sliding     2B1      689
+vram_test        250      592
+vsd_bit          2B7      695
+vsd_done         2F9      761
+vsd_fail         2FD      765
+vsd_next         2EB      747
+vsd_outer        2B5      693
+vsd_read         2D4      724
+vsd_rinc         2E8      744
+vsd_verify       2D0      720
+vsd_winc         2CD      717
+vsd_write        2BB      699

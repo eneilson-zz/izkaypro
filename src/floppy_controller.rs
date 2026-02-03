@@ -17,7 +17,7 @@ use super::media::*;
 // --- Kaypro 4/83 with ROM 81-232 (DSDD) ---
 // Uses: roms/81-232.rom in kaypro_machine.rs
 static DISK_CPM22: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
-static DISK_DIAGS: &[u8] = include_bytes!("../disks/cpm22-emudiags.img");
+static DISK_DIAGS: &[u8] = include_bytes!("../disks/KayproDiagnostics.img");
 const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
 const BOOT_DISK_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
 const DIAGS_DISK_NAME: &str = "Emulator Diagnostics (DSDD)";

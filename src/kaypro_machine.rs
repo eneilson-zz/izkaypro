@@ -85,12 +85,12 @@ const IO_PORT_NAMES: [&str; 32] = [
 // const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
 
 // --- Kaypro 4/83 with ROM 81-232 (4KB, DSDD) ---
- static ROM: &[u8] = include_bytes!("../roms/81-232.rom");
- const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
+// static ROM: &[u8] = include_bytes!("../roms/81-232.rom");
+// const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
 
 // --- Kaypro 2X/4/84 with ROM 81-292a (4KB, DSDD, SY6545 CRTC) ---
-//static ROM: &[u8] = include_bytes!("../roms/81-292a.rom");
-//const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
+static ROM: &[u8] = include_bytes!("../roms/81-292a.rom");
+const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
 
 // --- Kaypro 4-84 with Turbo ROM 3.4 (8KB, DSDD) ---
 // static ROM: &[u8] = include_bytes!("../roms/trom34.rom");

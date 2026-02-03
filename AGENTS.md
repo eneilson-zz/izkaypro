@@ -59,9 +59,10 @@ The 81-292a ROM uses the SY6545 CRTC for video instead of memory-mapped VRAM:
 - Port 0x1D: CRTC register data
 - Port 0x1F: Control/strobe AND character data
 
-**Strobe Mode:**
-- Strobe ON (0x20): R18/R19 writes set addr_hardware (for CRTC hardware use)
-- Strobe OFF (0x00): R18/R19 writes set addr_latch (for port 0x1F character writes)
+**Strobe Flag:**
+- The strobe flag is set by writing 0x20 to port 0x1F, cleared by writing 0x00
+- Used only for detecting ROM vs diag4 protocol in port 0x1F write handling
+- R18/R19 writes always update addr_latch regardless of strobe state
 
 **VRAM Write Protocol:**
 1. `OUT 0x1F, 0x00` - Strobe OFF (CPU mode)
@@ -77,11 +78,18 @@ The ROM uses both strobe modes - ON for hardware setup, OFF for VRAM writes.
 - VRAM addresses 0x0000-0x077F cover 24 rows of 80 columns
 - Boot screen at rows 10-13 (0x0320-0x044F), CP/M at rows 1-3 (0x0050-0x013F)
 
-**Port 0x1F Dual Purpose:**
+**Port 0x1F Dual Purpose (two protocols):**
+
+*ROM protocol* (81-292a) - reg_index is NOT 0x1F:
 - Value 0x00: Clear strobe only (no VRAM write)
 - Value 0x20: Write space to VRAM at addr_latch AND set strobe (enables screen clear)
 - Other values: Write character to VRAM at addr_latch
-- All writes auto-increment addr_latch
+
+*diag4 protocol* - strobe command (0x1F) sent to port 0x1C first (reg_index == 0x1F):
+- All values (including 0x00 and 0x20) are written as data to VRAM
+- Addresses are set explicitly via R18/R19 before each access
+
+Both protocols auto-increment addr_latch after writes.
 
 **Hardware Scrolling:**
 - ROM uses R12:R13 to change start_addr for hardware scrolling
@@ -109,6 +117,70 @@ Available configurations:
 - `src/media.rs` - Disk image handling and sector mapping
 - `src/keyboard_unix.rs` - Terminal keyboard handling, function keys, escape sequences
 - `src/screen.rs` - Terminal display, help overlay, disk selection prompts
+
+### Debugging Methodology
+
+When implementing new features or fixing issues, follow this incremental approach:
+
+1. **Make small, testable changes** - One feature or fix at a time
+2. **Use tracing flags** to understand behavior:
+   - `-v` (crtc-trace): VRAM writes, register changes
+   - `-i` (io-trace): All I/O port access
+   - `-f` (fdc-trace): Floppy controller commands
+   - `-c` (cpu-trace): CPU instruction execution
+3. **Test immediately** after each change with `cargo run`
+4. **If behavior worsens**, revert and investigate further before proceeding
+5. **Document discoveries** in AGENTS.md and code comments
+
+### Key Debugging Insights from SY6545 Work
+
+**Scrolling Issue Root Cause:**
+- The 81-292a ROM uses hardware scrolling via R12:R13 (start_addr)
+- VRAM addresses wrap at 2KB (0x800), not the full 16KB
+- Fix: `addr = (start + row * 80 + col) & 0x7FF` in screen.rs
+
+**Critical Discovery - Port 0x1F Dual Behavior:**
+- Value 0x00: Strobe OFF only (no VRAM write)
+- Value 0x20: Write space to VRAM AND set strobe ON (enables screen clear)
+- Other values: Write character to VRAM at addr_latch, then auto-increment
+
+**Memory-Mapped to CRTC VRAM Translation:**
+- Memory-mapped (0x3000-0x3FFF): 128-byte row stride
+- CRTC VRAM: 80-byte linear rows
+- Mirroring code must translate: `crtc_addr = row * 80 + col` (if col < 80)
+
+### EMUTEST.COM Diagnostic Tool
+
+Located in `disks/cpm22-emudiags.img` (Drive B), source in `doc/emutest.asm`:
+
+1. **ROM Checksum Test**: Relocates code to 0x8000, switches to ROM bank via port 0x14 bit 7, calculates checksum, switches back
+2. **RAM Tests**: Sliding-data and address-data patterns on 0x4000-0x7FFF and 0x8000-0xBFFF
+3. **VRAM Test**: Tests 2KB (0x000-0x7FF) via SY6545 CRTC transparent addressing protocol
+
+Run built-in diagnostics: `cargo run -- --diagnostics`
+
+### SY6545 CRTC Transparent Addressing Protocol (for VRAM access)
+
+Based on diag4.mac `cr4`/`cr5`/`cr6` routines for Kaypro 4 universal (`univ=true`):
+
+**Read VRAM byte at address HL:**
+1. `OUT 0x1C, 0x12` - Select R18 (Update Address High)
+2. `OUT 0x1D, H` - Write high byte of address
+3. `OUT 0x1C, 0x13` - Select R19 (Update Address Low)  
+4. `OUT 0x1D, L` - Write low byte of address
+5. `OUT 0x1C, 0x1F` - Send strobe command
+6. Wait: `IN 0x1C` until bit 7 = 1 (Update Ready)
+7. `IN 0x1F` - Read VRAM data byte
+
+**Write VRAM byte at address HL:**
+1-6. Same as read (set address and strobe, wait for ready)
+7. `OUT 0x1F, A` - Write VRAM data byte
+8. Wait: `IN 0x1C` until bit 7 = 1 (Write complete)
+
+**Constants from diag4.mac:**
+- `rwcmd = 0x121C` (B=0x12 for R18, C=0x1C for port)
+- `strcmd = 0x1F` (strobe command value)
+- `vcdata = 0x1F` (VRAM data port)
 
 ### Function Keys (macOS)
 macOS terminals send application-mode escape sequences. The emulator handles both Linux and macOS:

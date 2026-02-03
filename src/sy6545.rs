@@ -23,9 +23,8 @@ pub struct Sy6545 {
     pub vram_dirty: bool,
     
     // Transparent addressing state
-    strobe: bool,            // true = address mode (hardware), false = data mode (CPU)
-    addr_latch: u16,         // VRAM address for port 0x1F writes (set when strobe OFF)
-    addr_hardware: u16,      // Hardware address (set when strobe ON)
+    strobe: bool,            // Strobe flag for ROM protocol (0x00 clears, 0x20 sets)
+    addr_latch: u16,         // VRAM address for port 0x1F read/write
     
     pub trace: bool,
 }
@@ -39,7 +38,6 @@ impl Sy6545 {
             vram_dirty: true,
             strobe: false,
             addr_latch: 0,
-            addr_hardware: 0,
             trace: false,
         }
     }
@@ -81,41 +79,25 @@ impl Sy6545 {
                 }
             }
             18 => {
-                // R18 - Update Address High / Data
-                if self.strobe {
-                    // Strobe ON (hardware mode): set hardware address high byte
-                    self.addr_hardware = (self.addr_hardware & 0x00FF) | ((value as u16) << 8);
-                    if self.trace {
-                        println!("CRTC: R18 hw_addr_hi = 0x{:02x} (addr_hardware = 0x{:04x})", 
-                            value, self.addr_hardware);
-                    }
-                } else {
-                    // Strobe OFF (CPU mode): set CPU address high byte for port 0x1F writes
-                    self.addr_latch = (self.addr_latch & 0x00FF) | ((value as u16) << 8);
-                    if self.trace {
-                        println!("CRTC: R18 addr_hi = 0x{:02x} (addr_latch = 0x{:04x})", 
-                            value, self.addr_latch);
-                    }
+                // R18 - Update Address High
+                // Always update addr_latch - both ROM and diag4 protocols need this
+                // (The strobe-based distinction was incorrect; diag4 sets R18/R19
+                // without managing strobe state)
+                self.addr_latch = (self.addr_latch & 0x00FF) | ((value as u16) << 8);
+                if self.trace {
+                    println!("CRTC: R18 addr_hi = 0x{:02x} (addr_latch = 0x{:04x})", 
+                        value, self.addr_latch);
                 }
                 // SY6545 auto-increments reg_index from R18 to R19 for transparent addressing
                 self.reg_index = 19;
             }
             19 => {
-                // R19 - Update Address Low / Commit
-                if self.strobe {
-                    // Strobe ON (hardware mode): set hardware address low byte
-                    self.addr_hardware = (self.addr_hardware & 0xFF00) | (value as u16);
-                    if self.trace {
-                        println!("CRTC: R19 hw_addr_lo = 0x{:02x} (addr_hardware = 0x{:04x})", 
-                            value, self.addr_hardware);
-                    }
-                } else {
-                    // Strobe OFF (CPU mode): set CPU address low byte for port 0x1F writes
-                    self.addr_latch = (self.addr_latch & 0xFF00) | (value as u16);
-                    if self.trace {
-                        println!("CRTC: R19 addr_lo = 0x{:02x} (addr_latch = 0x{:04x})", 
-                            value, self.addr_latch);
-                    }
+                // R19 - Update Address Low
+                // Always update addr_latch - both protocols need this
+                self.addr_latch = (self.addr_latch & 0xFF00) | (value as u16);
+                if self.trace {
+                    println!("CRTC: R19 addr_lo = 0x{:02x} (addr_latch = 0x{:04x})", 
+                        value, self.addr_latch);
                 }
                 // SY6545 auto-increments reg_index back from R19 to R18 for transparent addressing
                 self.reg_index = 18;
@@ -153,13 +135,24 @@ impl Sy6545 {
     }
     
     /// Port 0x1F write - Control / Character Data
-    /// The 81-292a ROM uses port 0x1F for both control AND character output:
-    /// - Value 0x00: Clear strobe (ready for next char)
-    /// - Value 0x20: Set strobe AND write space to VRAM (dual purpose)
-    /// - Any other value: Character to write to VRAM at addr_latch
+    /// 
+    /// Two protocols use this port:
+    /// 
+    /// 1. ROM protocol (81-292a): Uses 0x00 and 0x20 as control codes
+    ///    - Value 0x00: Clear strobe (ready for next char)
+    ///    - Value 0x20: Set strobe AND write space to VRAM (dual purpose)
+    ///    - Other values: Character to write to VRAM at addr_latch
+    /// 
+    /// 2. diag4 protocol: Sends strobe command (0x1F) to port 0x1C first
+    ///    - All values written to port 0x1F are data (no control codes)
+    ///    - We detect this by checking if reg_index == 0x1F
     pub fn write_port_1f(&mut self, value: u8) {
-        // Value 0x00: just clear strobe (no write)
-        if value == 0x00 {
+        // Check if strobe command (0x1F) was sent to port 0x1C
+        // This indicates diag4 protocol - all values are data, no control codes
+        let diag_mode = self.reg_index == 0x1F;
+        
+        // Value 0x00: clear strobe in ROM mode, write data in diag mode
+        if value == 0x00 && !diag_mode {
             self.strobe = false;
             if self.trace {
                 println!("CRTC: Control = 0x00 (strobe=false)");
@@ -167,9 +160,8 @@ impl Sy6545 {
             return;
         }
         
-        // Value 0x20: set strobe AND write space to VRAM
-        // This allows the ROM to clear screen by repeatedly writing 0x20
-        if value == 0x20 {
+        // Value 0x20: set strobe AND write space in ROM mode, just write data in diag mode
+        if value == 0x20 && !diag_mode {
             // Write space to current addr_latch (before setting strobe)
             let masked_addr = (self.addr_latch as usize) & 0x3fff;
             self.vram[masked_addr] = 0x20; // space
@@ -186,7 +178,7 @@ impl Sy6545 {
             return;
         }
         
-        // Any other value is a character write to VRAM at current addr_latch
+        // Write value to VRAM at current addr_latch
         let masked_addr = (self.addr_latch as usize) & 0x3fff;
         self.vram[masked_addr] = value;
         self.vram_dirty = true;
@@ -197,13 +189,23 @@ impl Sy6545 {
                 if value >= 0x20 && value < 0x7f { value as char } else { '.' });
         }
         
-        // Auto-increment addr_latch after character write (SY6545 transparent addressing)
+        // Auto-increment addr_latch after write (SY6545 transparent addressing)
         self.addr_latch = self.addr_latch.wrapping_add(1);
     }
     
-    /// Port 0x1F read
-    pub fn read_port_1f(&self) -> u8 {
-        if self.strobe { 0x20 } else { 0x00 }
+    /// Port 0x1F read - VRAM data read via transparent addressing
+    /// Returns byte at current addr_latch (used by diag4 VRAM test)
+    pub fn read_port_1f(&mut self) -> u8 {
+        let masked_addr = (self.addr_latch as usize) & 0x3fff;
+        let value = self.vram[masked_addr];
+        
+        if self.trace {
+            println!("CRTC: Read VRAM[0x{:04x}] = 0x{:02x} '{}'", 
+                masked_addr, value,
+                if value >= 0x20 && value < 0x7f { value as char } else { '.' });
+        }
+        
+        value
     }
     
     /// Get VRAM byte at offset (for rendering)

@@ -1,14 +1,26 @@
 ; EMUTEST.COM - Emulator ROM and RAM diagnostics
 ; Based on diag4.mac from Non-Linear Systems, Inc. (1983)
 ; Implements proper ROM bank switching by relocating code to 0x8000
+; 
+; Test 3 (Video RAM) uses SY6545 CRTC transparent addressing:
+;   Port 0x1C: Register select (R18=addr_hi, R19=addr_lo)
+;   Port 0x1D: Register data
+;   Port 0x1F: VRAM data read/write + strobe control
+;   Wait for port 0x1C bit 7 = 1 (Update Ready) after strobe
 
 ; CP/M BDOS calls
 bdos:           equ     5
 conout:         equ     2
 prtstr:         equ     9
 
-; Kaypro 4-84 port
+; Kaypro 4-84 ports
 bitport:        equ     014h
+
+; SY6545 CRTC ports and commands (from diag4.mac univ=true)
+crtc_reg:       equ     01Ch    ; CRTC register select
+crtc_data:      equ     01Dh    ; CRTC register data
+crtc_vram:      equ     01Fh    ; CRTC VRAM data / strobe
+strcmd:         equ     01Fh    ; Strobe command value
 
         org     0100h
 
@@ -27,6 +39,9 @@ start:
 
         ; Test 2: RAM tests
         call    ram_test
+
+        ; Test 3: Video RAM test (SY6545 CRTC)
+        call    vram_test
 
         ; Print completion message
         ld      de, msg_done
@@ -346,6 +361,397 @@ ad_fail:
         ret
 
 ; ============================================================================
+; Video RAM Test (SY6545 CRTC transparent addressing)
+; Tests 2KB of VRAM at 0x0000-0x07FF via CRTC registers
+; ============================================================================
+vram_test:
+        ld      de, msg_vram
+        call    print
+
+        ; Save current VRAM contents to backup buffer at 0x9000
+        ld      hl, 0               ; VRAM address
+        ld      de, 09000h          ; Backup buffer
+        ld      bc, 0800h           ; 2KB
+vram_save:
+        push    bc
+        push    de
+        call    crtc_read           ; Read VRAM[HL] -> A
+        pop     de
+        ld      (de), a             ; Save to backup
+        inc     de
+        inc     hl
+        pop     bc
+        dec     bc
+        ld      a, b
+        or      c
+        jr      nz, vram_save
+
+        ; Perform sliding-data test on VRAM 0x0000-0x07FF
+        ld      hl, 0
+        ld      de, 07FFh
+        call    vram_sliding
+        jr      nz, vram_fail
+
+        ; Perform address-data test on VRAM 0x0000-0x07FF
+        ld      hl, 0
+        ld      de, 07FFh
+        call    vram_address
+        jr      nz, vram_fail
+
+        ; Restore VRAM contents from backup
+        call    vram_restore
+
+        ld      de, msg_pass
+        call    print
+        ret
+
+vram_fail:
+        ; Restore VRAM contents even on failure
+        call    vram_restore
+
+        ld      de, msg_fail
+        call    print
+        ret
+
+vram_restore:
+        ld      hl, 0               ; VRAM address
+        ld      de, 09000h          ; Backup buffer
+        ld      bc, 0800h           ; 2KB
+vram_rest_loop:
+        push    bc
+        push    hl
+        ld      a, (de)             ; Get from backup
+        call    crtc_write          ; Write VRAM[HL] <- A
+        pop     hl
+        inc     hl
+        inc     de
+        pop     bc
+        dec     bc
+        ld      a, b
+        or      c
+        jr      nz, vram_rest_loop
+        ret
+
+; ============================================================================
+; VRAM Sliding Data Test
+; Input: HL = start VRAM addr, DE = end VRAM addr
+; Output: Z=pass, NZ=fail
+; ============================================================================
+vram_sliding:
+        push    hl
+        push    de
+
+        ld      b, 1                ; Initial pattern 0x01
+vsd_outer:
+        ld      c, 8                ; 8 bit positions
+
+vsd_bit:
+        pop     de
+        pop     hl
+        push    hl
+        push    de
+
+        ; Write pattern B to all VRAM locations
+vsd_write:
+        push    bc
+        push    de
+        push    hl
+        ld      a, b                ; Pattern to write
+        call    crtc_write          ; Write to VRAM[HL]
+        pop     hl
+        pop     de
+        pop     bc
+        ; Check if HL == DE (end)
+        ld      a, h
+        cp      d
+        jr      nz, vsd_winc
+        ld      a, l
+        cp      e
+        jr      z, vsd_verify
+vsd_winc:
+        inc     hl
+        jr      vsd_write
+
+vsd_verify:
+        ; Verify pattern B in all VRAM locations
+        pop     de
+        pop     hl
+        push    hl
+        push    de
+
+vsd_read:
+        push    bc
+        push    de
+        push    hl
+        call    crtc_read           ; Read VRAM[HL] -> A
+        pop     hl
+        pop     de
+        pop     bc                  ; Restore pattern (B) and counter (C)
+        cp      b                   ; Compare read value (A) with expected pattern (B)
+        jr      nz, vsd_fail
+        ; Check if HL == DE (end)
+        ld      a, h
+        cp      d
+        jr      nz, vsd_rinc
+        ld      a, l
+        cp      e
+        jr      z, vsd_next
+vsd_rinc:
+        inc     hl
+        jr      vsd_read
+
+vsd_next:
+        rlc     b                   ; Rotate pattern left
+        dec     c                   ; Decrement bit counter
+        jr      nz, vsd_bit
+
+        ; After 8 rotations of 0x01, switch to 0xFE
+        ld      a, b
+        cp      1
+        jr      nz, vsd_done
+        ld      b, 0FEh
+        jr      vsd_outer
+
+vsd_done:
+        pop     de
+        pop     hl
+        xor     a                   ; Z=pass
+        ret
+
+vsd_fail:
+        pop     de
+        pop     hl
+        ld      a, 1
+        or      a                   ; NZ=fail
+        ret
+
+; ============================================================================
+; VRAM Address Data Test
+; Input: HL = start VRAM addr, DE = end VRAM addr
+; Output: Z=pass, NZ=fail
+; ============================================================================
+vram_address:
+        push    hl
+        push    de
+
+        ; Write low byte of address to each location
+        pop     de
+        pop     hl
+        push    hl
+        push    de
+
+vad_wlo:
+        push    de
+        push    hl
+        ld      a, l                ; Low byte of address
+        call    crtc_write          ; Write to VRAM[HL]
+        pop     hl
+        pop     de
+        ; Check if HL == DE
+        ld      a, h
+        cp      d
+        jr      nz, vad_wlinc
+        ld      a, l
+        cp      e
+        jr      z, vad_vlo
+vad_wlinc:
+        inc     hl
+        jr      vad_wlo
+
+vad_vlo:
+        ; Verify low bytes
+        pop     de
+        pop     hl
+        push    hl
+        push    de
+
+vad_rlo:
+        push    de
+        push    hl
+        call    crtc_read           ; Read VRAM[HL] -> A
+        pop     hl
+        pop     de
+        cp      l                   ; Compare with expected (low byte of addr)
+        jr      nz, vad_fail
+        ; Check if HL == DE
+        ld      a, h
+        cp      d
+        jr      nz, vad_rlinc
+        ld      a, l
+        cp      e
+        jr      z, vad_whi
+vad_rlinc:
+        inc     hl
+        jr      vad_rlo
+
+vad_whi:
+        ; Write high byte of address to each location
+        pop     de
+        pop     hl
+        push    hl
+        push    de
+
+vad_wh:
+        push    de
+        push    hl
+        ld      a, h                ; High byte of address
+        call    crtc_write          ; Write to VRAM[HL]
+        pop     hl
+        pop     de
+        ; Check if HL == DE
+        ld      a, h
+        cp      d
+        jr      nz, vad_whinc
+        ld      a, l
+        cp      e
+        jr      z, vad_vhi
+vad_whinc:
+        inc     hl
+        jr      vad_wh
+
+vad_vhi:
+        ; Verify high bytes
+        pop     de
+        pop     hl
+        push    hl
+        push    de
+
+vad_rhi:
+        push    de
+        push    hl
+        call    crtc_read           ; Read VRAM[HL] -> A
+        pop     hl
+        pop     de
+        cp      h                   ; Compare with expected (high byte of addr)
+        jr      nz, vad_fail
+        ; Check if HL == DE
+        ld      a, h
+        cp      d
+        jr      nz, vad_rhinc
+        ld      a, l
+        cp      e
+        jr      z, vad_done
+vad_rhinc:
+        inc     hl
+        jr      vad_rhi
+
+vad_done:
+        pop     de
+        pop     hl
+        xor     a                   ; Z=pass
+        ret
+
+vad_fail:
+        pop     de
+        pop     hl
+        ld      a, 1
+        or      a                   ; NZ=fail
+        ret
+
+; ============================================================================
+; CRTC VRAM Read - Read byte from VRAM via SY6545 transparent addressing
+; Input: HL = VRAM address (0x0000-0x07FF)
+; Output: A = byte read
+; Clobbers: BC
+; 
+; Protocol (from diag4.mac cr4/cr6):
+;   1. OUT 0x1C, 0x12       (select R18 - Update Address High)
+;   2. OUT 0x1D, H          (write high byte)
+;   3. OUT 0x1C, 0x13       (select R19 - Update Address Low)  
+;   4. OUT 0x1D, L          (write low byte)
+;   5. OUT 0x1C, 0x1F       (strobe command)
+;   6. Wait for IN 0x1C bit 7 = 1 (Update Ready)
+;   7. IN 0x1F              (read VRAM data)
+; ============================================================================
+crtc_read:
+        push    hl
+        ; Mask address to 11 bits (0-0x7FF)
+        ld      a, h
+        and     07h
+        ld      h, a
+
+        ; Select R18 and write high byte
+        ld      a, 012h             ; R18 - Update Address High
+        out     (crtc_reg), a
+        ld      a, h
+        out     (crtc_data), a
+
+        ; Select R19 and write low byte
+        ld      a, 013h             ; R19 - Update Address Low
+        out     (crtc_reg), a
+        ld      a, l
+        out     (crtc_data), a
+
+        ; Send strobe command
+        ld      a, strcmd
+        out     (crtc_reg), a
+
+        ; Wait for Update Ready (bit 7 of port 0x1C)
+crtc_read_wait:
+        in      a, (crtc_reg)
+        or      a
+        jp      p, crtc_read_wait   ; Loop while bit 7 = 0
+
+        ; Read VRAM data
+        in      a, (crtc_vram)
+
+        pop     hl
+        ret
+
+; ============================================================================
+; CRTC VRAM Write - Write byte to VRAM via SY6545 transparent addressing
+; Input: HL = VRAM address (0x0000-0x07FF), A = byte to write
+; Clobbers: BC
+;
+; Protocol (from diag4.mac cr5/cr6):
+;   1-6. Same as read (set address and strobe)
+;   7. OUT 0x1F, A          (write VRAM data)
+;   8. Wait for IN 0x1C bit 7 = 1 (write complete)
+; ============================================================================
+crtc_write:
+        push    hl
+        push    af                  ; Save data byte
+        ; Mask address to 11 bits (0-0x7FF)
+        ld      a, h
+        and     07h
+        ld      h, a
+
+        ; Select R18 and write high byte
+        ld      a, 012h             ; R18 - Update Address High
+        out     (crtc_reg), a
+        ld      a, h
+        out     (crtc_data), a
+
+        ; Select R19 and write low byte
+        ld      a, 013h             ; R19 - Update Address Low
+        out     (crtc_reg), a
+        ld      a, l
+        out     (crtc_data), a
+
+        ; Send strobe command
+        ld      a, strcmd
+        out     (crtc_reg), a
+
+        ; Wait for Update Ready (bit 7 of port 0x1C)
+crtc_write_wait1:
+        in      a, (crtc_reg)
+        or      a
+        jp      p, crtc_write_wait1 ; Loop while bit 7 = 0
+
+        ; Write VRAM data
+        pop     af                  ; Restore data byte
+        out     (crtc_vram), a
+
+        ; Wait for write complete
+crtc_write_wait2:
+        in      a, (crtc_reg)
+        or      a
+        jp      p, crtc_write_wait2 ; Loop while bit 7 = 0
+
+        pop     hl
+        ret
+
+; ============================================================================
 ; Utility routines
 ; ============================================================================
 
@@ -398,6 +804,9 @@ msg_ram1:
 
 msg_ram2:
         db      "RAM Test 0x8000-0xBFFF: $"
+
+msg_vram:
+        db      "VRAM Test 0x0000-0x07FF: $"
 
 msg_pass:
         db      "PASS", 13, 10, "$"

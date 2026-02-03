@@ -119,7 +119,11 @@ fn main() {
         println!("{}", WELCOME);
         // Determine ROM size based on current configuration
         let rom_size = 0x1000; // 4KB for most Kaypro ROMs
-        let results = diagnostics::run_diagnostics(&mut machine, rom_size);
+        let mut results = diagnostics::run_diagnostics(&mut machine, rom_size);
+        // Add VRAM test (requires direct CRTC access)
+        results.push(diagnostics::test_vram(&mut machine.crtc));
+        // Add VRAM test via port I/O protocol (same as EMUTEST)
+        results.push(diagnostics::test_vram_via_ports(&mut machine.crtc));
         diagnostics::print_results(&results);
         return;
     }
