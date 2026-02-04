@@ -127,6 +127,8 @@ The ROM writes to VRAM using transparent addressing:
 
 Port 0x1F writes do NOT auto-increment addr_latch. The ROM sets R18/R19 explicitly before each access.
 
+**IMPORTANT**: Port 0x1F writes are only accepted when R31 is selected (reg_index == 0x1F). This prevents stray VRAM corruption when the ROM writes to port 0x1F after accessing other registers (e.g., cursor registers R14/R15).
+
 ### Display Layout
 
 - 80-byte linear rows starting from R12:R13 (start_addr)
@@ -145,7 +147,8 @@ Port 0x1F writes do NOT auto-increment addr_latch. The ROM sets R18/R19 explicit
 - READ ADDRESS does not modify sector register
 - READ ADDRESS returns head byte = 0 for both sides (Kaypro 4-84 format)
 - Index pulse (status bit 1) is simulated when motor is on - required for Turbo ROM
-- STEP IN (0x40-0x5F) and STEP OUT (0x60-0x7F) commands are supported
+- STEP (0x20-0x3F), STEP IN (0x40-0x5F) and STEP OUT (0x60-0x7F) commands are supported
+- STEP command moves in the same direction as the last STEP IN or STEP OUT (tracked via step_direction field)
 
 ## ROM Shadowing
 
