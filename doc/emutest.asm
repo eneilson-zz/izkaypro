@@ -2,7 +2,13 @@
 ; Based on diag4.mac from Non-Linear Systems, Inc. (1983)
 ; Implements proper ROM bank switching by relocating code to 0x8000
 ; 
-; Test 3 (Video RAM) uses SY6545 CRTC transparent addressing:
+; Tests:
+;   1. ROM Checksum - switches to ROM bank, calculates checksum
+;   2. RAM Tests - sliding-data and address-data on 0x4000-0xBFFF
+;   3. Video RAM (0x0000-0x07FF) - character RAM via SY6545 CRTC
+;   4. Attribute RAM (0x0800-0x0FFF) - attribute RAM via SY6545 CRTC
+;
+; SY6545 CRTC transparent addressing protocol:
 ;   Port 0x1C: Register select (R18=addr_hi, R19=addr_lo)
 ;   Port 0x1D: Register data
 ;   Port 0x1F: VRAM data read/write + strobe control
@@ -42,6 +48,9 @@ start:
 
         ; Test 3: Video RAM test (SY6545 CRTC)
         call    vram_test
+
+        ; Test 4: Attribute RAM test (SY6545 CRTC)
+        call    attr_test
 
         ; Print completion message
         ld      de, msg_done
@@ -649,8 +658,81 @@ vad_fail:
         ret
 
 ; ============================================================================
+; Attribute RAM Test (SY6545 CRTC transparent addressing)
+; Tests 2KB of Attribute RAM at 0x0800-0x0FFF via CRTC registers
+; This is the fourth video test from diag4.mac (vatst)
+; ============================================================================
+attr_test:
+        ld      de, msg_attr
+        call    print
+
+        ; Save current Attribute RAM contents to backup buffer at 0x9800
+        ld      hl, 0800h           ; Attribute RAM starts at 0x800
+        ld      de, 09800h          ; Backup buffer (after VRAM backup)
+        ld      bc, 0800h           ; 2KB
+attr_save:
+        push    bc
+        push    de
+        call    crtc_read           ; Read VRAM[HL] -> A
+        pop     de
+        ld      (de), a             ; Save to backup
+        inc     de
+        inc     hl
+        pop     bc
+        dec     bc
+        ld      a, b
+        or      c
+        jr      nz, attr_save
+
+        ; Perform sliding-data test on Attribute RAM 0x0800-0x0FFF
+        ld      hl, 0800h
+        ld      de, 0FFFh
+        call    vram_sliding        ; Reuse VRAM sliding test
+        jr      nz, attr_fail
+
+        ; Perform address-data test on Attribute RAM 0x0800-0x0FFF
+        ld      hl, 0800h
+        ld      de, 0FFFh
+        call    vram_address        ; Reuse VRAM address test
+        jr      nz, attr_fail
+
+        ; Restore Attribute RAM contents from backup
+        call    attr_restore
+
+        ld      de, msg_pass
+        call    print
+        ret
+
+attr_fail:
+        ; Restore Attribute RAM contents even on failure
+        call    attr_restore
+
+        ld      de, msg_fail
+        call    print
+        ret
+
+attr_restore:
+        ld      hl, 0800h           ; Attribute RAM address
+        ld      de, 09800h          ; Backup buffer
+        ld      bc, 0800h           ; 2KB
+attr_rest_loop:
+        push    bc
+        push    hl
+        ld      a, (de)             ; Get from backup
+        call    crtc_write          ; Write VRAM[HL] <- A
+        pop     hl
+        inc     hl
+        inc     de
+        pop     bc
+        dec     bc
+        ld      a, b
+        or      c
+        jr      nz, attr_rest_loop
+        ret
+
+; ============================================================================
 ; CRTC VRAM Read - Read byte from VRAM via SY6545 transparent addressing
-; Input: HL = VRAM address (0x0000-0x07FF)
+; Input: HL = VRAM address (0x0000-0x0FFF for char + attr RAM)
 ; Output: A = byte read
 ; Clobbers: BC
 ; 
@@ -665,9 +747,9 @@ vad_fail:
 ; ============================================================================
 crtc_read:
         push    hl
-        ; Mask address to 11 bits (0-0x7FF)
+        ; Mask address to 12 bits (0-0xFFF for char + attr)
         ld      a, h
-        and     07h
+        and     0Fh
         ld      h, a
 
         ; Select R18 and write high byte
@@ -700,7 +782,7 @@ crtc_read_wait:
 
 ; ============================================================================
 ; CRTC VRAM Write - Write byte to VRAM via SY6545 transparent addressing
-; Input: HL = VRAM address (0x0000-0x07FF), A = byte to write
+; Input: HL = VRAM address (0x0000-0x0FFF for char + attr RAM), A = byte to write
 ; Clobbers: BC
 ;
 ; Protocol (from diag4.mac cr5/cr6):
@@ -711,9 +793,9 @@ crtc_read_wait:
 crtc_write:
         push    hl
         push    af                  ; Save data byte
-        ; Mask address to 11 bits (0-0x7FF)
+        ; Mask address to 12 bits (0-0xFFF for char + attr)
         ld      a, h
-        and     07h
+        and     0Fh
         ld      h, a
 
         ; Select R18 and write high byte
@@ -807,6 +889,9 @@ msg_ram2:
 
 msg_vram:
         db      "VRAM Test 0x0000-0x07FF: $"
+
+msg_attr:
+        db      "Attr RAM Test 0x0800-0x0FFF: $"
 
 msg_pass:
         db      "PASS", 13, 10, "$"

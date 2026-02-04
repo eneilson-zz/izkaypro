@@ -124,28 +124,57 @@ impl Screen {
             println!("//==================================================================================\\\\");
         }
         
-        // For CRTC mode, display uses 128-byte stride starting at 0x300
-        // (based on original working implementation from thread summary)
+        // Get cursor position for CRTC mode
+        let (cursor_addr, cursor_visible) = if machine.video_mode == VideoMode::Sy6545Crtc {
+            let addr = machine.crtc.cursor_addr() & 0x7FF; // Mask to 2KB VRAM
+            let mode = machine.crtc.cursor_mode();
+            // Mode 0 = steady, 1 = invisible, 2/3 = blink (we show steady for now)
+            (addr, mode != 1)
+        } else {
+            (0xFFFF, false) // No cursor in memory-mapped mode (handled differently)
+        };
+        
+        // For CRTC mode, display uses linear 80-byte rows from start_addr
         for row in 0..24 {
             print!("|| ");
             for col in 0..80 {
-                let code = if machine.video_mode == VideoMode::Sy6545Crtc {
+                let (code, attr, is_cursor) = if machine.video_mode == VideoMode::Sy6545Crtc {
                     // CRTC mode: linear 80-byte rows from start_addr (R12:R13)
                     // VRAM wraps at 2KB (0x800) for hardware scrolling
                     let start = machine.crtc.start_addr();
                     let addr = (start + row * 80 + col) & 0x7FF; // 2KB wrap
-                    machine.crtc.get_vram(addr)
+                    let at_cursor = cursor_visible && addr == cursor_addr;
+                    (machine.crtc.get_vram(addr), machine.crtc.get_attr(addr), at_cursor)
                 } else {
                     // Memory-mapped mode: 128-byte stride from 0x0
-                    machine.vram[(row * 128 + col) as usize]
+                    (machine.vram[(row * 128 + col) as usize], 0u8, false)
                 };
                 let ch = translate_char(code);
-                if code & 0x80 == 0 {
-                    print!("{}", ch);
+                
+                // Attribute bits (Kaypro 2-84/4-84 Theory of Operation):
+                // Bit 0: Reverse video
+                // Bit 1: Half intensity (dim)
+                // Bit 2: Blink
+                // Bit 3: Underline (16th row only - not visible in terminal)
+                let reverse = (attr & 0x01) != 0 || is_cursor;
+                let dim = (attr & 0x02) != 0;
+                // In CRTC mode, blink comes from attribute RAM bit 2
+                // In memory-mapped mode, blink comes from character bit 7
+                let blink = if machine.video_mode == VideoMode::Sy6545Crtc {
+                    (attr & 0x04) != 0
                 } else {
-                    // Blinking
-                    print!("\x1b[5m{}\x1b[25m", ch);
-                }
+                    (code & 0x80) != 0
+                };
+                let underline = (attr & 0x08) != 0;
+                
+                // Build ANSI escape sequence for attributes
+                let mut seq = String::new();
+                if reverse { seq.push_str("\x1b[7m"); }
+                if dim { seq.push_str("\x1b[2m"); }
+                if blink { seq.push_str("\x1b[5m"); }
+                if underline { seq.push_str("\x1b[4m"); }
+                
+                print!("{}{}\x1b[0m", seq, ch);
             }
             println!(" ||");
         }

@@ -3,40 +3,41 @@ use super::media::*;
 // ============================================================================
 // KAYPRO DISK IMAGE SELECTION
 // ============================================================================
-// Uncomment ONE of the following sections to select the boot disk.
+// Uncomment ONE of the following sections to select the disk images.
+// DISK_A = Drive A (boot disk), DISK_B = Drive B
 // IMPORTANT: Also update the ROM selection in kaypro_machine.rs to match!
-
-// --- Kaypro 4/84 with ROM 81-292a (DSDD) ---
-// Uses: roms/81-292a.rom in kaypro_machine.rs
-//static DISK_CPM22: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
-//static DISK_BLANK: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
-//const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
-//const BOOT_DISK_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
-//const BLANK_DISK_NAME: &str = "Blank DSDD disk";
-
-// --- Kaypro 4/83 with ROM 81-232 (DSDD) ---
-// Uses: roms/81-232.rom in kaypro_machine.rs
-static DISK_CPM22: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
-static DISK_DIAGS: &[u8] = include_bytes!("../disks/KayproDiagnostics.img");
-const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
-const BOOT_DISK_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
-const DIAGS_DISK_NAME: &str = "Emulator Diagnostics (DSDD)";
-
-// --- Kaypro 4-84 with Turbo ROM 3.4 (DSDD) ---
-// Uses: roms/trom34.rom in kaypro_machine.rs
-// static DISK_CPM22: &[u8] = include_bytes!("../disks/k484_turborom_63k_boot.img");
-// static DISK_BLANK: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
-// const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
-// const BOOT_DISK_NAME: &str = "CP/M 2.2 Turbo ROM 3.4 (DSDD)";
-// const BLANK_DISK_NAME: &str = "Blank DSDD disk";
 
 // --- Kaypro II with ROM 81-149 (SSDD) ---
 // Uses: roms/81-149c.rom in kaypro_machine.rs
-// static DISK_CPM22: &[u8] = include_bytes!("../disks/cpm22-rom149.img");
-// static DISK_BLANK: &[u8] = include_bytes!("../disks/blank.img");
-// const DEFAULT_FORMAT: MediaFormat = MediaFormat::SsDd;
-// const BOOT_DISK_NAME: &str = "CP/M 2.2 Kaypro II (SSDD)";
-// const BLANK_DISK_NAME: &str = "Blank SSDD disk";
+//static DISK_A: &[u8] = include_bytes!("../disks/cpm22-rom149.img");
+//static DISK_B: &[u8] = include_bytes!("../disks/blank.img");
+//const DEFAULT_FORMAT: MediaFormat = MediaFormat::SsDd;
+//const DISK_A_NAME: &str = "CP/M 2.2 Kaypro II (SSDD)";
+//const DISK_B_NAME: &str = "Blank SSDD disk";
+
+// --- Kaypro 4/83 with ROM 81-232 (DSDD) ---
+// Uses: roms/81-232.rom in kaypro_machine.rs
+//static DISK_A: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
+//static DISK_B: &[u8] = include_bytes!("../disks/cpm22-emudiags.img");
+//const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
+//const DISK_A_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
+//const DISK_B_NAME: &str = "Emulator Diagnostics (DSDD)";
+
+// --- Kaypro 4/84 with ROM 81-292a (DSDD) ---
+// Uses: roms/81-292a.rom in kaypro_machine.rs
+static DISK_A: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
+static DISK_B: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
+const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
+const DISK_A_NAME: &str = "CP/M 2.2F Kaypro 4/84 (DSDD)";
+const DISK_B_NAME: &str = "Blank disk";
+
+// --- Kaypro 4-84 with Turbo ROM 3.4 (DSDD) ---
+// Uses: roms/trom34.rom in kaypro_machine.rs
+//static DISK_A: &[u8] = include_bytes!("../disks/k484_turborom_63k_boot.img");
+//static DISK_B: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
+//const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
+//const DISK_A_NAME: &str = "CP/M 2.2 Turbo ROM 3.4 (DSDD)";
+//const DISK_B_NAME: &str = "Blank DSDD disk";
 
 // ============================================================================
 
@@ -49,7 +50,9 @@ pub struct FloppyController {
     pub motor_on: bool,
     pub drive: u8,
     side_2: bool,
-    track: u8,
+    track: u8,           // Track register (software-accessible)
+    head_position: u8,   // Physical head position (moved by STEP commands)
+    step_direction: i8,  // Last step direction: 1 = in (towards higher tracks), -1 = out
     sector: u8,
     pub single_density: bool,
     data: u8,
@@ -61,6 +64,9 @@ pub struct FloppyController {
     read_last: usize,
 
     data_buffer: Vec<u8>,
+
+    // Index pulse simulation - counter for toggling index bit
+    status_read_count: u32,
 
     pub raise_nmi: bool,
     pub trace: bool,
@@ -88,6 +94,8 @@ impl FloppyController {
             drive: 0,
             side_2: false,
             track: 0,
+            head_position: 0,
+            step_direction: 1, // Default to stepping in
             sector: 0,
             single_density: false,
             data: 0,
@@ -95,16 +103,16 @@ impl FloppyController {
             media: [
                 Media {
                     file: None,
-                    name: BOOT_DISK_NAME.to_owned(),
-                    content: DISK_CPM22.to_vec(),
+                    name: DISK_A_NAME.to_owned(),
+                    content: DISK_A.to_vec(),
                     format: DEFAULT_FORMAT,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
                 Media {
                     file: None,
-                    name: DIAGS_DISK_NAME.to_owned(),
-                    content: DISK_DIAGS.to_vec(),
+                    name: DISK_B_NAME.to_owned(),
+                    content: DISK_B.to_vec(),
                     format: DEFAULT_FORMAT,
                     write_min: usize::MAX,
                     write_max: 0,
@@ -115,6 +123,8 @@ impl FloppyController {
             read_last: 0,
 
             data_buffer: Vec::new(),
+
+            status_read_count: 0,
 
             raise_nmi: false,
             trace,
@@ -172,6 +182,7 @@ impl FloppyController {
             self.read_index = 0;
             self.read_last = 0;
             self.track = 0x00;
+            self.head_position = 0; // Physical head returns to track 0
             self.status = FDCStatus::LostDataOrTrack0 as u8;
             self.raise_nmi = true;
 
@@ -184,9 +195,78 @@ impl FloppyController {
             }
             if self.media_selected().is_valid_track(track) {
                 self.track = track;
+                self.head_position = track; // Physical head moves to target
                 self.status = FDCStatus::NoError as u8;
             } else {
                 self.status = FDCStatus::SeekErrorOrRecordNotFound as u8;
+            }
+            self.raise_nmi = true;
+        } else if (command & 0xe0) == 0x20 {
+            // STEP command, type I
+            // 001T_hVrr (T=1 updates track register)
+            // Moves in same direction as last STEP IN or STEP OUT
+            let update_track = (command & 0x10) != 0;
+            if self.step_direction > 0 {
+                // Step in (towards higher tracks)
+                if self.head_position < 39 {
+                    self.head_position += 1;
+                }
+            } else {
+                // Step out (towards track 0)
+                if self.head_position > 0 {
+                    self.head_position -= 1;
+                }
+            }
+            if update_track {
+                self.track = self.head_position;
+            }
+            if self.trace {
+                println!("FDC: Step (dir={}, update={}) head={}", 
+                    if self.step_direction > 0 { "in" } else { "out" }, 
+                    update_track, self.head_position);
+            }
+            if self.head_position == 0 {
+                self.status = FDCStatus::LostDataOrTrack0 as u8;
+            } else {
+                self.status = FDCStatus::NoError as u8;
+            }
+            self.raise_nmi = true;
+        } else if (command & 0xe0) == 0x40 {
+            // STEP IN command, type I
+            // 010T_hVrr (T=1 updates track register)
+            let update_track = (command & 0x10) != 0;
+            self.step_direction = 1; // Remember direction for STEP command
+            // Always move physical head
+            if self.head_position < 39 {
+                self.head_position += 1;
+            }
+            if update_track {
+                self.track = self.head_position;
+            }
+            if self.trace {
+                println!("FDC: Step in (update={}) head={}", update_track, self.head_position);
+            }
+            self.status = FDCStatus::NoError as u8;
+            self.raise_nmi = true;
+        } else if (command & 0xe0) == 0x60 {
+            // STEP OUT command, type I
+            // 011T_hVrr (T=1 updates track register)
+            let update_track = (command & 0x10) != 0;
+            self.step_direction = -1; // Remember direction for STEP command
+            // Always move physical head
+            if self.head_position > 0 {
+                self.head_position -= 1;
+            }
+            if update_track {
+                self.track = self.head_position;
+            }
+            if self.trace {
+                println!("FDC: Step out (update={}) head={}", update_track, self.head_position);
+            }
+            if self.head_position == 0 {
+                self.status = FDCStatus::LostDataOrTrack0 as u8;
+            } else {
+                self.status = FDCStatus::NoError as u8;
             }
             self.raise_nmi = true;
         } else if (command & 0xe0) == 0x80 {
@@ -196,11 +276,11 @@ impl FloppyController {
                 panic!("Multiple sector reads not supported")
             }
             if self.trace || self.trace_rw {
-                println!("FDC: Read sector (Si:{}, Tr:{}, Se:{})", self.side_2, self.track, self.sector);
+                println!("FDC: Read sector (Si:{}, Tr:{}, Se:{}, Head:{})", self.side_2, self.track, self.sector, self.head_position);
             }
 
             let side_2 = self.side_2;
-            let track = self.track;
+            let track = self.head_position; // Use physical head position for disk access
             let sector = self.sector;
             let (valid, index, last) =  self.media_selected().sector_index(side_2, track, sector);
             if valid {
@@ -222,11 +302,11 @@ impl FloppyController {
                 panic!("Delete data mark not supported")
             }
             if self.trace || self.trace_rw {
-                println!("FDC: Write sector (Si:{}, Tr:{}, Se:{})", self.side_2, self.track, self.sector);
+                println!("FDC: Write sector (Si:{}, Tr:{}, Se:{}, Head:{})", self.side_2, self.track, self.sector, self.head_position);
             }
 
             let side_2 = self.side_2;
-            let track = self.track;
+            let track = self.head_position; // Use physical head position for disk access
             let sector = self.sector;
             let (valid, index, last) =  self.media_selected().sector_index(side_2, track, sector);
             if valid {
@@ -242,18 +322,28 @@ impl FloppyController {
             // READ ADDRESS command, type III
             // 1100_0E00
             let side_2 = self.side_2;
-            let track = self.track;
+            let track = self.head_position; // Use physical head position
             let sector = self.sector;
 
-            let (valid, sector_id) = self.media_selected().read_address(side_2, track, sector);
+            let (valid, _base_sector_id) = self.media_selected().read_address(side_2, track, sector);
             if valid {
+                // Simulate disk rotation - return different sector IDs each time
+                // This is needed for Turbo ROM which polls READ ADDRESS to find sectors
+                // Use status_read_count to rotate through sectors 0-9 (side 0) or 10-19 (side 1)
+                let rotation_pos = (self.status_read_count / 10) as u8 % 10;
+                let sector_id = if side_2 {
+                    10 + rotation_pos  // Sectors 10-19 on side 1
+                } else {
+                    rotation_pos       // Sectors 0-9 on side 0
+                };
+                
                 if self.trace {
                     println!("FDC: Read address ({},{},{}) -> sector_id={}", side_2, track, sector, sector_id);
                 }
                 // Note: Real WD1793 does NOT modify sector register during READ ADDRESS
                 self.status = FDCStatus::NoError as u8;
                 self.data_buffer.clear();
-                self.data_buffer.push(self.track);
+                self.data_buffer.push(self.head_position); // Physical track from sector header
                 self.data_buffer.push(0); // Kaypro 4-84: head byte is always 0 in sector ID
                 self.data_buffer.push(sector_id);
                 self.data_buffer.push(2); // For sector size 512
@@ -302,7 +392,22 @@ impl FloppyController {
         // Consume data if queued
         self.get_data();
 
-        self.status
+        // Simulate index pulse (bit 1) when motor is on
+        // At 300 RPM, one rotation = 200ms, index pulse duration ~2-4ms
+        // We simulate it by toggling every N status reads (timing not critical)
+        self.status_read_count = self.status_read_count.wrapping_add(1);
+        let index_pulse = if self.motor_on {
+            // Pulse is active for a short period (~5% of rotation cycle)
+            (self.status_read_count % 100) < 5
+        } else {
+            false
+        };
+
+        let mut status = self.status;
+        if index_pulse {
+            status |= 0x02; // Set Index bit (bit 1)
+        }
+        status
     }
 
     pub fn put_track(&mut self, value: u8) {

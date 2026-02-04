@@ -81,8 +81,8 @@ const IO_PORT_NAMES: [&str; 32] = [
 // IMPORTANT: Also update the disk selection in floppy_controller.rs to match!
 
 // --- Kaypro II with ROM 81-149c (2KB, SSDD) ---
-// static ROM: &[u8] = include_bytes!("../roms/81-149c.rom");
-// const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
+//static ROM: &[u8] = include_bytes!("../roms/81-149c.rom");
+//const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
 
 // --- Kaypro 4/83 with ROM 81-232 (4KB, DSDD) ---
 // static ROM: &[u8] = include_bytes!("../roms/81-232.rom");
@@ -93,8 +93,8 @@ static ROM: &[u8] = include_bytes!("../roms/81-292a.rom");
 const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
 
 // --- Kaypro 4-84 with Turbo ROM 3.4 (8KB, DSDD) ---
-// static ROM: &[u8] = include_bytes!("../roms/trom34.rom");
-// const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
+//static ROM: &[u8] = include_bytes!("../roms/trom34.rom");
+//const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
 
 
 pub struct KayproMachine {
@@ -276,10 +276,11 @@ impl Machine for KayproMachine {
         if address < 0x3000 && self.is_rom_rank() {
             // ROM at 0x0000-0x2FFF when in ROM bank mode
             ROM[(address as usize) % ROM.len()]
-        } else if address >= 0x3000 && address < 0x4000 {
-            // VRAM at 0x3000-0x3FFF is always accessible (81-292a behavior)
-            // In ROM mode: VRAM is visible
-            // In RAM mode: BIOS still accesses VRAM here for video output
+        } else if address >= 0x3000 && address < 0x4000 && self.is_rom_rank() 
+                  && self.video_mode == VideoMode::MemoryMapped {
+            // Memory-mapped VRAM at 0x3000-0x3FFF only in ROM bank mode
+            // and only for MemoryMapped video mode (Kaypro II, 4/83)
+            // For SY6545 CRTC mode, VRAM is accessed via ports, not memory
             self.vram[address as usize - 0x3000]
         } else {
             self.ram[address as usize]
@@ -290,25 +291,14 @@ impl Machine for KayproMachine {
         if address < 0x3000 && self.is_rom_rank() {
             // Writes to ROM area go to RAM (for ROM shadowing)
             self.ram[address as usize] = value;
-        } else if address >= 0x3000 && address < 0x4000 {
-            // VRAM at 0x3000-0x3FFF is always writable
+        } else if address >= 0x3000 && address < 0x4000 && self.is_rom_rank()
+                  && self.video_mode == VideoMode::MemoryMapped {
+            // Memory-mapped VRAM at 0x3000-0x3FFF only in ROM bank mode
+            // and only for MemoryMapped video mode (Kaypro II, 4/83)
+            // For SY6545 CRTC mode, VRAM is accessed via ports, not memory
             let offset = address as usize - 0x3000;
             self.vram[offset] = value;
             self.vram_dirty = true;
-            
-            // For SY6545 mode, mirror to CRTC VRAM
-            // Memory-mapped VRAM uses 128-byte stride, CRTC uses 80-byte linear
-            // Convert: mem_row = offset / 128, mem_col = offset % 128
-            // If col < 80, write to crtc_addr = row * 80 + col
-            if self.video_mode == VideoMode::Sy6545Crtc {
-                let row = offset / 128;
-                let col = offset % 128;
-                if col < 80 && row < 24 {
-                    let crtc_addr = row * 80 + col;
-                    self.crtc.vram[crtc_addr] = value;
-                    self.crtc.vram_dirty = true;
-                }
-            }
         } else {
             self.ram[address as usize] = value;
         }
@@ -352,10 +342,8 @@ impl Machine for KayproMachine {
                     // CRTC register select
                     self.crtc.write_port_1c(value);
                 } else {
-                    // Memory-mapped mode: system bits (if not CRT timing)
-                    if !self.is_rom_rank() || value & 0x80 != 0 {
-                        self.update_system_bits(value);
-                    }
+                    // Memory-mapped mode (Kaypro II, 4/83): system bits control
+                    self.update_system_bits(value);
                 }
             },
             0x1d => {

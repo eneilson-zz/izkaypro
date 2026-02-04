@@ -1,6 +1,3 @@
-# This specifies which new Cargo.toml features are enabled.
-#cargo-features = ["named-profiles"]
-
 [package]
 name = "izkaypro"
 version = "0.1.1"

@@ -36,7 +36,7 @@ pub fn test_rom<M: Machine>(machine: &M, rom_size: usize) -> TestResult {
     let known_checksums: &[(u16, &str)] = &[
         (0x5A70, "Kaypro 2"),
         (0x6A92, "Kaypro 4/83 (81-232)"),
-        // Add more as discovered
+        (0x0B69, "Kaypro 2X/4/84 (81-292a)"),
     ];
     
     let mut matched_rom = None;
@@ -213,9 +213,9 @@ pub fn test_vram(crtc: &mut super::sy6545::Sy6545) -> TestResult {
     let start: usize = 0x000;
     let end: usize = 0x7FF;
     
-    // Save current VRAM contents
-    let mut backup = [0u8; 0x800];
-    for i in 0..0x800 {
+    // Save current VRAM contents (4KB - char + attr)
+    let mut backup = [0u8; 4096];
+    for i in 0..4096 {
         backup[i] = crtc.vram[i];
     }
     
@@ -234,7 +234,7 @@ pub fn test_vram(crtc: &mut super::sy6545::Sy6545) -> TestResult {
                 let read = crtc.vram[addr];
                 if read != pattern {
                     // Restore and return error
-                    for i in 0..0x800 {
+                    for i in 0..4096 {
                         crtc.vram[i] = backup[i];
                     }
                     return TestResult {
@@ -256,11 +256,11 @@ pub fn test_vram(crtc: &mut super::sy6545::Sy6545) -> TestResult {
         let expected = (addr & 0xFF) as u8;
         let read = crtc.vram[addr];
         if read != expected {
-            for i in 0..0x800 {
+            for i in 0..4096 {
                 crtc.vram[i] = backup[i];
             }
-            return TestResult {
-                name: "VRAM (addr-lo)".to_string(),
+                    return TestResult {
+                        name: "VRAM (addr-lo)".to_string(),
                 passed: false,
                 message: format!("FAIL at 0x{:04X}: expected 0x{:02X}, got 0x{:02X}", 
                     addr, expected, read),
@@ -276,7 +276,7 @@ pub fn test_vram(crtc: &mut super::sy6545::Sy6545) -> TestResult {
         let expected = ((addr >> 8) & 0xFF) as u8;
         let read = crtc.vram[addr];
         if read != expected {
-            for i in 0..0x800 {
+            for i in 0..4096 {
                 crtc.vram[i] = backup[i];
             }
             return TestResult {
@@ -289,7 +289,7 @@ pub fn test_vram(crtc: &mut super::sy6545::Sy6545) -> TestResult {
     }
     
     // Restore VRAM
-    for i in 0..0x800 {
+    for i in 0..4096 {
         crtc.vram[i] = backup[i];
     }
     
@@ -306,9 +306,9 @@ pub fn test_vram_via_ports(crtc: &mut super::sy6545::Sy6545) -> TestResult {
     let start: usize = 0x000;
     let end: usize = 0x7FF;
     
-    // Save current VRAM contents
-    let mut backup = [0u8; 0x800];
-    for i in 0..0x800 {
+    // Save current VRAM contents (4KB - char + attr)
+    let mut backup = [0u8; 4096];
+    for i in 0..4096 {
         backup[i] = crtc.vram[i];
     }
     
@@ -361,7 +361,7 @@ pub fn test_vram_via_ports(crtc: &mut super::sy6545::Sy6545) -> TestResult {
         let read_back = crtc_read(crtc, addr);
         if read_back != test_pattern {
             // Restore VRAM
-            for i in 0..0x800 {
+            for i in 0..4096 {
                 crtc.vram[i] = backup[i];
             }
             return TestResult {
@@ -380,7 +380,7 @@ pub fn test_vram_via_ports(crtc: &mut super::sy6545::Sy6545) -> TestResult {
         let read_back = crtc_read(crtc, addr as u16);
         if read_back != pattern {
             // Restore VRAM
-            for i in 0..0x800 {
+            for i in 0..4096 {
                 crtc.vram[i] = backup[i];
             }
             return TestResult {
@@ -393,12 +393,93 @@ pub fn test_vram_via_ports(crtc: &mut super::sy6545::Sy6545) -> TestResult {
     }
     
     // Restore VRAM
-    for i in 0..0x800 {
+    for i in 0..4096 {
         crtc.vram[i] = backup[i];
     }
     
     TestResult {
         name: "VRAM via ports".to_string(),
+        passed: true,
+        message: format!("OK (0x{:04X}-0x{:04X})", start, end),
+    }
+}
+
+/// Run Attribute RAM test on SY6545 CRTC (2KB range 0x800-0xFFF)
+/// This is the fourth video test from diag4.mac (vatst)
+pub fn test_attr_ram(crtc: &mut super::sy6545::Sy6545) -> TestResult {
+    let start: usize = 0x800;
+    let end: usize = 0xFFF;
+    
+    // Save current VRAM contents (4KB - char + attr)
+    let mut backup = [0u8; 4096];
+    for i in 0..4096 {
+        backup[i] = crtc.vram[i];
+    }
+    
+    // Fast-complement test (from diag4.mac vatst)
+    // Read location, complement, write back, verify, restore
+    for addr in start..=end {
+        let original = crtc.vram[addr];
+        let complement = !original;
+        
+        // Write complement
+        crtc.vram[addr] = complement;
+        
+        // Verify
+        let read_back = crtc.vram[addr];
+        if read_back != complement {
+            // Restore and return error
+            for i in 0..4096 {
+                crtc.vram[i] = backup[i];
+            }
+            return TestResult {
+                name: "Attribute RAM".to_string(),
+                passed: false,
+                message: format!("FAIL at 0x{:04X}: expected 0x{:02X}, got 0x{:02X}", 
+                    addr, complement, read_back),
+            };
+        }
+        
+        // Restore original
+        crtc.vram[addr] = original;
+    }
+    
+    // Sliding data test
+    for initial_pattern in [0x01u8, 0xFE] {
+        for bit_pos in 0..8 {
+            let pattern = initial_pattern.rotate_left(bit_pos);
+            
+            // Write pattern to all locations
+            for addr in start..=end {
+                crtc.vram[addr] = pattern;
+            }
+            
+            // Verify pattern
+            for addr in start..=end {
+                let read = crtc.vram[addr];
+                if read != pattern {
+                    // Restore and return error
+                    for i in 0..4096 {
+                        crtc.vram[i] = backup[i];
+                    }
+                    return TestResult {
+                        name: "Attribute RAM (sliding)".to_string(),
+                        passed: false,
+                        message: format!("FAIL at 0x{:04X}: expected 0x{:02X}, got 0x{:02X}", 
+                            addr, pattern, read),
+                    };
+                }
+            }
+        }
+    }
+    
+    // Restore VRAM
+    for i in 0..4096 {
+        crtc.vram[i] = backup[i];
+    }
+    
+    TestResult {
+        name: "Attribute RAM".to_string(),
         passed: true,
         message: format!("OK (0x{:04X}-0x{:04X})", start, end),
     }

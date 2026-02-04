@@ -124,6 +124,8 @@ fn main() {
         results.push(diagnostics::test_vram(&mut machine.crtc));
         // Add VRAM test via port I/O protocol (same as EMUTEST)
         results.push(diagnostics::test_vram_via_ports(&mut machine.crtc));
+        // Add Attribute RAM test (fourth video test from diag4.mac)
+        results.push(diagnostics::test_attr_ram(&mut machine.crtc));
         diagnostics::print_results(&results);
         return;
     }
@@ -197,15 +199,21 @@ fn main() {
             machine.floppy_controller.raise_nmi = false;
             next_signal = counter + 10_000_000;
         }
+        let mut nmi_signaled = false;
         if next_signal != 0 && counter >= next_signal {
             cpu.signal_nmi();
             next_signal = 0;
+            nmi_signaled = true;
         }
-        if counter < next_signal && cpu.is_halted() {
+        if next_signal != 0 && cpu.is_halted() {
+            // CPU is halted waiting for interrupt - signal NMI immediately
             cpu.signal_nmi();
             next_signal = 0;
+            nmi_signaled = true;
         }
-        if cpu.is_halted() {
+        // Only check for uninterruptible halt if we didn't just signal NMI
+        // (the CPU needs at least one cycle to process the NMI and exit HALT)
+        if !nmi_signaled && cpu.is_halted() {
             screen.update(&mut machine, true);
             println!("HALT instruction that will never be interrupted");
             break;
