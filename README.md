@@ -1,8 +1,8 @@
-# Kaypro II emulator on the terminal
+# Kaypro emulator on the terminal
 
 ## What is this?
 
-This is a Kaypro II emulator that runs on a Linux terminal. It can boot and use disk images for the Kaypro.
+This is a Kaypro emulator that runs on a terminal. It supports multiple Kaypro models and can boot and use disk images.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
@@ -20,6 +20,39 @@ It's a typical CP/M computer of the early 80s, built on a metal case with standa
 - Two single or double side double density drives with 200kb/400kb capacity
 - A serial port (not emulated by izkaypro)
 - A parallel port (not emulated by izkaypro)
+
+## Supported Models
+
+| Model | ROM | Disk Format | Video Mode |
+|-------|-----|-------------|------------|
+| Kaypro II | 81-149c | SSDD (200KB) | Memory-mapped |
+| Kaypro 4/83 | 81-232 | DSDD (400KB) | Memory-mapped |
+| Kaypro 2X/4/84 | 81-292a | DSDD (400KB) | SY6545 CRTC |
+| TurboROM 3.4 | trom34 | DSDD (400KB) | SY6545 CRTC |
+
+## Configuration
+
+Edit `izkaypro.toml` to select the Kaypro model by uncommenting the desired configuration:
+
+```toml
+# --- Kaypro II ---
+# model = "kaypro_ii"
+
+# --- Kaypro 4/83 ---
+# model = "kaypro4_83"
+
+# --- Kaypro 4/84 (default) ---
+model = "kaypro4_84"
+
+# --- TurboROM 3.4 ---
+# model = "turbo_rom"
+```
+
+Optional: override default disk images by adding:
+```toml
+disk_a = "disks/my_boot_disk.img"
+disk_b = "disks/my_data_disk.img"
+```
 
 ## Usage examples
 

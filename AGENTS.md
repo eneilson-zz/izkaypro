@@ -33,18 +33,42 @@ cargo run -- [options] [disk_a] [disk_b]
 | SSDD   | 200KB | 40 | 1 | 10 | 512 |
 | DSDD   | 400KB | 40 | 2 | 10 (0-9 side0, 10-19 side1) | 512 |
 
-## Switching Configurations
+## Configuration
 
-To switch between Kaypro models, update **both** files:
+The emulator is configured via `izkaypro.toml` in the project root. Edit this file to select different Kaypro models and disk images.
 
-1. **src/kaypro_machine.rs** - Comment/uncomment the ROM selection
-2. **src/floppy_controller.rs** - Comment/uncomment the matching disk selection
+### Configuration File (izkaypro.toml)
 
-Available configurations:
-- **Kaypro II**: 81-149c.rom + cpm22-rom149.img (SSDD)
-- **Kaypro 4/83**: 81-232.rom + k484-cpm22f-boot.img (DSDD)
-- **Kaypro 2X/4/84 (81-292a)**: 81-292a.rom + k484-cpm22f-boot.img (DSDD) ← **Currently active**
-- **Kaypro 4-84 Turbo ROM**: trom34.rom + k484_turborom_63k_boot.img (DSDD, 8KB ROM)
+```toml
+# Kaypro Model Presets:
+#   kaypro_ii   - Kaypro II (SSDD, 81-149c ROM, memory-mapped video)
+#   kaypro4_83  - Kaypro 4/83 (DSDD, 81-232 ROM, memory-mapped video)
+#   kaypro4_84  - Kaypro 2X/4/84 (DSDD, 81-292a ROM, SY6545 CRTC)
+#   turbo_rom   - Kaypro 4/84 with TurboROM 3.4 (DSDD, SY6545 CRTC)
+#   custom      - Use custom settings below
+
+model = "kaypro4_84"
+
+# Custom settings (only used when model = "custom")
+# rom_file = "roms/my_custom.rom"
+# video_mode = "sy6545"       # "memory_mapped" or "sy6545"
+# disk_format = "dsdd"        # "ssdd" or "dsdd"
+
+# Disk images (optional, override model defaults)
+# disk_a = "disks/my_boot_disk.img"
+# disk_b = "disks/my_data_disk.img"
+```
+
+### Model Configurations
+
+| Model | ROM | Disk Format | Video Mode |
+|-------|-----|-------------|------------|
+| kaypro_ii | 81-149c.rom | SSDD | Memory-mapped |
+| kaypro4_83 | 81-232.rom | DSDD | Memory-mapped |
+| kaypro4_84 | 81-292a.rom | DSDD | SY6545 CRTC |
+| turbo_rom | trom34.rom | DSDD | SY6545 CRTC |
+
+Command-line disk arguments override config file settings.
 
 ## Key Files
 
@@ -173,7 +197,7 @@ ESC cancels disk selection prompts (F5/F6).
 cargo run
 
 # Test with specific disk images
-cargo run -- disks/k484-cpm22f-boot.img disks/Zork.img
+cargo run -- disks/cpm22g-rom292a.img disks/Zork.img
 
 # Run with CRTC tracing
 cargo run -- -v

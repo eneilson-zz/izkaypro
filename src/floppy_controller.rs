@@ -1,45 +1,9 @@
+use std::fs;
 use super::media::*;
 
-// ============================================================================
-// KAYPRO DISK IMAGE SELECTION
-// ============================================================================
-// Uncomment ONE of the following sections to select the disk images.
-// DISK_A = Drive A (boot disk), DISK_B = Drive B
-// IMPORTANT: Also update the ROM selection in kaypro_machine.rs to match!
-
-// --- Kaypro II with ROM 81-149 (SSDD) ---
-// Uses: roms/81-149c.rom in kaypro_machine.rs
-//static DISK_A: &[u8] = include_bytes!("../disks/cpm22-rom149.img");
-//static DISK_B: &[u8] = include_bytes!("../disks/blank.img");
-//const DEFAULT_FORMAT: MediaFormat = MediaFormat::SsDd;
-//const DISK_A_NAME: &str = "CP/M 2.2 Kaypro II (SSDD)";
-//const DISK_B_NAME: &str = "Blank SSDD disk";
-
-// --- Kaypro 4/83 with ROM 81-232 (DSDD) ---
-// Uses: roms/81-232.rom in kaypro_machine.rs
-//static DISK_A: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
-//static DISK_B: &[u8] = include_bytes!("../disks/cpm22-emudiags.img");
-//const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
-//const DISK_A_NAME: &str = "CP/M 2.2F Kaypro 4/83 (DSDD)";
-//const DISK_B_NAME: &str = "Emulator Diagnostics (DSDD)";
-
-// --- Kaypro 4/84 with ROM 81-292a (DSDD) ---
-// Uses: roms/81-292a.rom in kaypro_machine.rs
-static DISK_A: &[u8] = include_bytes!("../disks/k484-cpm22f-boot.img");
-static DISK_B: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
-const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
-const DISK_A_NAME: &str = "CP/M 2.2F Kaypro 4/84 (DSDD)";
-const DISK_B_NAME: &str = "Blank disk";
-
-// --- Kaypro 4-84 with Turbo ROM 3.4 (DSDD) ---
-// Uses: roms/trom34.rom in kaypro_machine.rs
-//static DISK_A: &[u8] = include_bytes!("../disks/k484_turborom_63k_boot.img");
-//static DISK_B: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
-//const DEFAULT_FORMAT: MediaFormat = MediaFormat::DsDd;
-//const DISK_A_NAME: &str = "CP/M 2.2 Turbo ROM 3.4 (DSDD)";
-//const DISK_B_NAME: &str = "Blank DSDD disk";
-
-// ============================================================================
+// Fallback embedded disk images (used when external files can't be loaded)
+static FALLBACK_DISK_DSDD: &[u8] = include_bytes!("../disks/cpm22g-rom292a.img");
+static FALLBACK_BLANK_DSDD: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
 
 pub enum Drive {
     A = 0,
@@ -88,7 +52,28 @@ pub enum FDCStatus {
 }
 
 impl FloppyController {
-    pub fn new(trace: bool, trace_rw: bool) -> FloppyController {
+    /// Create a new floppy controller with specified disk images and format
+    pub fn new(
+        disk_a_path: &str,
+        disk_b_path: &str,
+        default_format: MediaFormat,
+        trace: bool,
+        trace_rw: bool,
+    ) -> FloppyController {
+        // Load disk A from file, fall back to embedded if not found
+        let (disk_a_content, disk_a_name) = Self::load_disk_or_fallback(
+            disk_a_path,
+            FALLBACK_DISK_DSDD,
+            "Fallback Boot Disk (DSDD)",
+        );
+        
+        // Load disk B from file, fall back to embedded if not found
+        let (disk_b_content, disk_b_name) = Self::load_disk_or_fallback(
+            disk_b_path,
+            FALLBACK_BLANK_DSDD,
+            "Fallback Blank Disk (DSDD)",
+        );
+        
         FloppyController {
             motor_on: false,
             drive: 0,
@@ -103,17 +88,17 @@ impl FloppyController {
             media: [
                 Media {
                     file: None,
-                    name: DISK_A_NAME.to_owned(),
-                    content: DISK_A.to_vec(),
-                    format: DEFAULT_FORMAT,
+                    name: disk_a_name,
+                    content: disk_a_content,
+                    format: default_format,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
                 Media {
                     file: None,
-                    name: DISK_B_NAME.to_owned(),
-                    content: DISK_B.to_vec(),
-                    format: DEFAULT_FORMAT,
+                    name: disk_b_name,
+                    content: disk_b_content,
+                    format: default_format,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -129,6 +114,17 @@ impl FloppyController {
             raise_nmi: false,
             trace,
             trace_rw,
+        }
+    }
+    
+    /// Load a disk image from file, falling back to embedded data if not found
+    fn load_disk_or_fallback(path: &str, fallback: &'static [u8], fallback_name: &str) -> (Vec<u8>, String) {
+        match fs::read(path) {
+            Ok(content) => (content, path.to_string()),
+            Err(_) => {
+                eprintln!("Warning: Could not load disk image '{}', using fallback", path);
+                (fallback.to_vec(), fallback_name.to_string())
+            }
         }
     }
 

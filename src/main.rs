@@ -1,6 +1,7 @@
 use clap::{Arg, App};
 use iz80::*;
 
+mod config;
 mod kaypro_machine;
 mod floppy_controller;
 mod keyboard_unix;
@@ -9,26 +10,29 @@ mod screen;
 mod sy6545;
 mod diagnostics;
 
+use self::config::Config;
 use self::kaypro_machine::KayproMachine;
 use self::floppy_controller::FloppyController;
 use self::screen::Screen;
 use self::keyboard_unix::Command;
 
-// Welcome message - Update this when switching Kaypro models
-const WELCOME: &str =
-"Kaypro https://github.com/ivanizag/izkaypro
-Emulation of Kaypro 2X/4/84 (DSDD, 81-292a ROM) - see kaypro_machine.rs to switch models";
-
 
 fn main() {
+    // Load configuration from file (or use defaults)
+    let config = Config::load();
+    let welcome = format!(
+        "izkaypro - Kaypro Emulator\nhttps://github.com/ivanizag/izkaypro\nConfiguration: {}",
+        config.get_description()
+    );
+    
     // Parse arguments
-    let matches = App::new(WELCOME)
+    let matches = App::new(&welcome[..])
         .arg(Arg::with_name("DISKA")
-            .help("Disk A: image file. Empty or $ to load CP/M")
+            .help("Disk A: image file. Empty or $ to use config default")
             .required(false)
             .index(1))
         .arg(Arg::with_name("DISKB")
-            .help("Disk B: image file. Default is a blank disk")
+            .help("Disk B: image file. Empty to use config default")
             .required(false)
             .index(2))
         .arg(Arg::with_name("cpu_trace")
@@ -69,8 +73,18 @@ fn main() {
             .help("Run ROM and RAM diagnostics then exit"))
         .get_matches();
 
-    let disk_a = matches.value_of("DISKA");
-    let disk_b = matches.value_of("DISKB");
+    // Command line disk overrides (or use config defaults)
+    let disk_a_path = matches.value_of("DISKA")
+        .filter(|s| *s != "$")
+        .map(|s| s.to_string())
+        .or_else(|| config.disk_a.clone())
+        .unwrap_or_else(|| config.get_default_disk_a().to_string());
+    
+    let disk_b_path = matches.value_of("DISKB")
+        .map(|s| s.to_string())
+        .or_else(|| config.disk_b.clone())
+        .unwrap_or_else(|| config.get_default_disk_b().to_string());
+    
     let mut trace_cpu = matches.is_present("cpu_trace");
     let trace_io = matches.is_present("io_trace");
     let trace_fdc = matches.is_present("fdc_trace");
@@ -90,33 +104,29 @@ fn main() {
         || trace_crtc
         || trace_system_bits;
 
-    // Init device
-    let floppy_controller = FloppyController::new(trace_fdc, trace_fdc_rw);
+    // Init device with configuration
+    let floppy_controller = FloppyController::new(
+        &disk_a_path,
+        &disk_b_path,
+        config.get_disk_format(),
+        trace_fdc,
+        trace_fdc_rw,
+    );
     let mut screen = Screen::new(!any_trace);
-    let mut machine = KayproMachine::new(floppy_controller,
-        trace_io, trace_system_bits, trace_crtc);
+    let mut machine = KayproMachine::new(
+        config.get_rom_path(),
+        config.get_video_mode(),
+        floppy_controller,
+        trace_io,
+        trace_system_bits,
+        trace_crtc,
+    );
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);
 
-    // Load disk images
-    if let Some(disk_a) = disk_a {
-        if  disk_a != "$" {
-            if let Err(err) = machine.floppy_controller.media_a_mut().load_disk(disk_a) {
-                println!("Error loading file '{}': {}", disk_a, err);
-                return;
-            }
-        }
-    }
-    if let Some(disk_b) = disk_b {
-        if let Err(err) = machine.floppy_controller.media_b_mut().load_disk(disk_b) {
-            println!("Error loading file '{}': {}", disk_b, err);
-            return;
-        }
-    }
-
     // Run diagnostics if requested
     if run_diag {
-        println!("{}", WELCOME);
+        println!("{}", welcome);
         // Determine ROM size based on current configuration
         let rom_size = 0x1000; // 4KB for most Kaypro ROMs
         let mut results = diagnostics::run_diagnostics(&mut machine, rom_size);
@@ -131,7 +141,7 @@ fn main() {
     }
 
     // Start the cpu
-    println!("{}", WELCOME);
+    println!("{}", welcome);
     screen.init();
 
     let instructions_per_refresh = if any_trace {256*1024} else {2*1024};

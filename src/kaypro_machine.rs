@@ -74,30 +74,11 @@ const IO_PORT_NAMES: [&str; 32] = [
     ];
 
 
-// ============================================================================
-// KAYPRO ROM SELECTION
-// ============================================================================
-// Uncomment ONE of the following to select the ROM.
-// IMPORTANT: Also update the disk selection in floppy_controller.rs to match!
-
-// --- Kaypro II with ROM 81-149c (2KB, SSDD) ---
-//static ROM: &[u8] = include_bytes!("../roms/81-149c.rom");
-//const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
-
-// --- Kaypro 4/83 with ROM 81-232 (4KB, DSDD) ---
-// static ROM: &[u8] = include_bytes!("../roms/81-232.rom");
-// const VIDEO_MODE: VideoMode = VideoMode::MemoryMapped;
-
-// --- Kaypro 2X/4/84 with ROM 81-292a (4KB, DSDD, SY6545 CRTC) ---
-static ROM: &[u8] = include_bytes!("../roms/81-292a.rom");
-const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
-
-// --- Kaypro 4-84 with Turbo ROM 3.4 (8KB, DSDD) ---
-//static ROM: &[u8] = include_bytes!("../roms/trom34.rom");
-//const VIDEO_MODE: VideoMode = VideoMode::Sy6545Crtc;
-
+// Fallback ROM (used when external ROM file can't be loaded)
+static FALLBACK_ROM: &[u8] = include_bytes!("../roms/81-292a.rom");
 
 pub struct KayproMachine {
+    rom: Vec<u8>,
     ram: [u8; 65536],
     pub vram: [u8; 4096],
     pub vram_dirty: bool,
@@ -116,13 +97,22 @@ pub struct KayproMachine {
 }
 
 impl KayproMachine {
-    pub fn new(floppy_controller: FloppyController,
-            trace_io: bool, trace_system_bits: bool, trace_crtc: bool) -> KayproMachine {
+    pub fn new(
+        rom_path: &str,
+        video_mode: VideoMode,
+        floppy_controller: FloppyController,
+        trace_io: bool,
+        trace_system_bits: bool,
+        trace_crtc: bool,
+    ) -> KayproMachine {
+        // Load ROM from file, fall back to embedded if not found
+        let rom_data = Self::load_rom_or_fallback(rom_path);
+        
         // Initialize RAM with ROM content (ROM shadowing)
         // This is needed for ROMs like Turbo ROM that switch to RAM bank
         // and expect to continue executing the same code from RAM.
         let mut ram = [0u8; 65536];
-        for (i, &byte) in ROM.iter().enumerate() {
+        for (i, &byte) in rom_data.iter().enumerate() {
             ram[i] = byte;
         }
         
@@ -130,12 +120,13 @@ impl KayproMachine {
         crtc.trace = trace_crtc;
         
         KayproMachine {
+            rom: rom_data,
             ram,
             vram: [0; 4096],
             vram_dirty: false,
             system_bits: SystemBit::Bank as u8 | SystemBit::MotorsOff as u8,
             port14_raw: 0xDF, // Initial value for 81-292a (ROM mode, drive A, motor on)
-            video_mode: VIDEO_MODE,
+            video_mode,
             crtc,
             trace_io,
             trace_system_bits,
@@ -143,7 +134,18 @@ impl KayproMachine {
             floppy_controller,
         }
     }
-
+    
+    /// Load ROM from file, falling back to embedded ROM if not found
+    fn load_rom_or_fallback(path: &str) -> Vec<u8> {
+        match std::fs::read(path) {
+            Ok(content) => content,
+            Err(_) => {
+                eprintln!("Warning: Could not load ROM '{}', using fallback", path);
+                FALLBACK_ROM.to_vec()
+            }
+        }
+    }
+    
     pub fn is_rom_rank(&self) -> bool {
         self.system_bits & SystemBit::Bank as u8 != 0
     }
@@ -273,9 +275,9 @@ impl KayproMachine {
 
 impl Machine for KayproMachine {
     fn peek(&self, address: u16) -> u8 {
-        if address < 0x3000 && self.is_rom_rank() {
-            // ROM at 0x0000-0x2FFF when in ROM bank mode
-            ROM[(address as usize) % ROM.len()]
+        if (address as usize) < self.rom.len() && self.is_rom_rank() {
+            // ROM at 0x0000-ROM_SIZE when in ROM bank mode
+            self.rom[address as usize]
         } else if address >= 0x3000 && address < 0x4000 && self.is_rom_rank() 
                   && self.video_mode == VideoMode::MemoryMapped {
             // Memory-mapped VRAM at 0x3000-0x3FFF only in ROM bank mode
@@ -283,6 +285,7 @@ impl Machine for KayproMachine {
             // For SY6545 CRTC mode, VRAM is accessed via ports, not memory
             self.vram[address as usize - 0x3000]
         } else {
+            // RAM (which contains ROM data shadowed at startup for addresses < ROM size)
             self.ram[address as usize]
         }
     }

@@ -10,6 +10,8 @@ iz80 = "^0.3.5"
 #iz80 = {path = "../iz80"}
 clap = "^2"
 termios = "^0.3.3"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
 
 # The profile that 'dist' will build with
 [profile.dist]
