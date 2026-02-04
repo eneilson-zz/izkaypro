@@ -7,6 +7,7 @@ pub struct Screen {
     last_system_bits: u8,
     pub show_status: bool,
     pub show_help: bool,
+    machine_name: String,
 }
 
 #[allow(dead_code)]
@@ -27,12 +28,35 @@ const CONTROL_CHARS_81_234: [char; 32] = [
 const SHOWN_SYSTEM_BITS: u8 = 0b0110_0011;
 
 impl Screen {
-    pub fn new(in_place: bool) -> Screen {
+    pub fn new(in_place: bool, machine_name: &str) -> Screen {
         Screen {
             in_place,
             last_system_bits: 0,
             show_status: false,
             show_help: false,
+            machine_name: machine_name.to_string(),
+        }
+    }
+    
+    /// Format the top border line with centered machine name
+    fn format_title_line(&self) -> String {
+        // Total width is 86 chars: "//" + 82 chars + "\\\\"
+        let inner_width = 82;
+        let name = &self.machine_name;
+        let name_len = name.len();
+        
+        if name_len >= inner_width - 4 {
+            // Name too long, just show equals
+            format!("//{}\\\\", "=".repeat(inner_width))
+        } else {
+            // Center the name with equals on both sides
+            let remaining = inner_width - name_len;
+            let left_pad = remaining / 2;
+            let right_pad = remaining - left_pad;
+            format!("//{}{}{}\\\\", 
+                "=".repeat(left_pad), 
+                name, 
+                "=".repeat(right_pad))
         }
     }
 
@@ -121,7 +145,7 @@ impl Screen {
         if self.show_status {
             println!("//====Last key: 0x{:02x}================================================================\\\\", machine.keyboard.peek_key());
         } else {
-            println!("//==================================================================================\\\\");
+            println!("{}", self.format_title_line());
         }
         
         // Get cursor position for CRTC mode

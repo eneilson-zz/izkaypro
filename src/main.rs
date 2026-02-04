@@ -112,7 +112,7 @@ fn main() {
         trace_fdc,
         trace_fdc_rw,
     );
-    let mut screen = Screen::new(!any_trace);
+    let mut screen = Screen::new(!any_trace, config.get_display_name());
     let mut machine = KayproMachine::new(
         config.get_rom_path(),
         config.get_video_mode(),

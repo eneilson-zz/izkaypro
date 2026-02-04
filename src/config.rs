@@ -217,4 +217,15 @@ impl Config {
             KayproModel::Custom => format!("Custom ({})", self.get_rom_path()),
         }
     }
+    
+    /// Get a short user-friendly name for display in the emulator title
+    pub fn get_display_name(&self) -> &str {
+        match self.model {
+            KayproModel::KayproII => "Kaypro II",
+            KayproModel::Kaypro4_83 => "Kaypro 4/83",
+            KayproModel::Kaypro4_84 => "Kaypro 4-84",
+            KayproModel::TurboRom => "Kaypro 4-84 TurboROM",
+            KayproModel::Custom => "Custom Kaypro",
+        }
+    }
 }
