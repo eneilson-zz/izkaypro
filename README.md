@@ -60,75 +60,41 @@ izkaypro does not require installation, you just need the executable. It has the
 
 ### Usage with no arguments
 Run the executable on a terminal and type the CP/M commands (you can try DIR and changing drives with B:). Press F4 to exit back to the host shell prompt.
-```
-casa@servidor:~/$ ./izkaypro
-Kaypro https://github.com/ivanizag/izkaypro
-Emulation of the Kaypro II computer
 
-//==================================================================================\\
-||                                                                                  ||
-|| KAYPRO II 64k CP/M vers 2.2                                                      ||
-||                                                                                  ||
-|| A>dir                                                                            ||
-|| A: MOVCPM   COM : PIP      COM : SUBMIT   COM : XSUB     COM                     ||
-|| A: ED       COM : ASM      COM : DDT      COM : STAT     COM                     ||
-|| A: SYSGEN   COM : DUMP     ASM : COPY     COM : BAUD     COM                     ||
-|| A: TERM     COM : SBASIC   COM : D        COM : OVERLAYB COM                     ||
-|| A: BASICLIB REL : USERLIB  REL : FAC      BAS : XAMN     BAS                     ||
-|| A: DPLAY    BAS : CONFIG   COM : LOAD     COM : DUMP     COM                     ||
-|| A: SETDISK  COM : INITDISK COM :          PRN :          HEX                     ||
-|| A>b:                                                                             ||
-|| B>dir                                                                            ||
-|| NO FILE                                                                          ||
-|| B>a:stat                                                                         ||
-|| A: R/W, Space: 4k                                                                ||
-|| B: R/W, Space: 191k                                                              ||
-||                                                                                  ||
-||                                                                                  ||
-|| B>_                                                                              ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-\\================================================= F1 for help ==== F4 to exit ====//```
-```
 ### Usage with external images
 You can provide up two disk images as binary files to use as A: and B: drives. If only an image is provided, it will be the A: disk, B: will be a blank disk.
 
-The images have to be raw binary images of single sided disks. The size must be 204800 bytes. See [disk images](doc/disk_images.md).
+//===================================Kaypro 4-84====================================\\
+||                                                                                  ||
+|| KAYPRO 63K CP/M Version 2.2G                                                     ||
+||                                                                                  ||
+|| A0>dir                                                                           ||
+|| A: ASM      COM : CONFIG   COM : COPY     COM : D        COM                     ||
+|| A: DDT      COM : DISK7    COM : LOAD     COM : MAKE     COM                     ||
+|| A: MFDISK   COM : MOVCPM   COM : PIP      COM : STAT     COM                     ||
+|| A: SUBMIT   COM : SYSGEN   COM : TERM     COM : VERIFY   COM                     ||
+|| A: VERIFY   DOC : VIEW     COM : XSUB     COM : BAUDM    COM                     ||
+|| A: BAUDP    COM : CLS      COM : DUMP     COM : ED       COM                     ||
+|| A: KAYPRO   DOC : ST       COM : STD      COM : COMPARE  COM                     ||
+|| A: DSKPRAM  COM : DU-V78   COM : EDFILE   COM : EDIT     COM                     ||
+|| A: FBAD57   COM : PROBE    COM : RAMMAP   COM : UNERA    COM                     ||
+|| A: LASM     COM : LSWEEP   COM : MLOAD    COM : UNCR     COM                     ||
+|| A: MBASIC   COM : OBASIC   COM : KAYCLK   COM : COPYSS   COM                     ||
+|| A: ACCESS   COM                                                                  ||
+|| A0>                                                                              ||
+||                                                                                  ||
+||                                                                                  ||
+||                                                                                  ||
+||                                                                                  ||
+||                                                                                  ||
+||                                                                                  ||
+||                                                                                  ||
+\\================================================ F1 for help ==== F4 to exit ====//
 
-```
-casa@servidor:~/$ ./izkaypro disks/cpmish.img disks/WordStar33.img 
-B: disks/WordStar33.img
-Kaypro https://github.com/ivanizag/izkaypro
-Emulation of the Kaypro II computer
+If using the Kaypro II configuration, the images have to be raw binary images of single sided disks. The size must be 204800 bytes. See [disk images](doc/disk_images.md).
 
-//==================================================================================\\
-||                                                                                  ||
-|| CP/Mish 2.2r0 for Kaypro II                                                      ||
-||                                                                                  ||
-|| A>dir                                                                            ||
-|| COPY    .COM  |  DUMP    .COM  |  ASM     .COM  |  STAT    .COM                  ||
-|| BBCBASIC.COM  |  SUBMIT  .COM  |  QE      .COM                                   ||
-|| A>dir b:                                                                         ||
-|| WS      .COM  |  WSOVLY1 .OVR  |  WSMSGS  .OVR  |  WS      .INS                  ||
-|| WINSTALL.COM  |  PRINT   .TST                                                    ||
-|| A>stat                                                                           ||
-|| A: R/W, space: 135/195kB                                                         ||
-|| B: R/W, space: 27/195kB                                                          ||
-||                                                                                  ||
-|| A>bbcbasic                                                                       ||
-|| BBC BASIC (Z80) Version 3.00+1                                                   ||
-|| (C) Copyright R.T.Russell 1987                                                   ||
-|| >PRINT "Hi!"                                                                     ||
-|| Hi!                                                                              ||
-|| >*BYE                                                                            ||
-||                                                                                  ||
-|| A>_                                                                              ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-\\================================================= F1 for help ==== F4 to exit ====//```
+If using the Kaypro IV, 4-84, or 4-84 TurboROM configurations, images can be either SDDD or DSDD disk images.  Sample images of both sides are provided in the ./disks directory.  If you swap disks, make sure to enter Ctrl-C to warm boot and re-load the new disk so that the BIOS will properly detect SSDD or DSDD format.
+
 ```
 ### Online help
 Press F1 to get additional help:
