@@ -202,7 +202,7 @@ impl Screen {
             }
             println!(" ||");
         }
-        println!("\\\\======{}==================================== F1 for help ==== F4 to exit ====//", disk_status);
+        println!("\\\\======{}===================================== F1 for help ==== F4 to exit ====//", disk_status);
 
         if self.show_help {
             self.update_help(machine)
