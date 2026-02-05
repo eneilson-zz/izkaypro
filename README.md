@@ -2,7 +2,7 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs on a terminal. It supports multiple Kaypro models and can boot and use disk images.
+This is a Kaypro emulator that runs in a terminal window. It supports multiple Kaypro models and can boot and use disk images.  For best display results, set your terminal window to 86 x 27.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
