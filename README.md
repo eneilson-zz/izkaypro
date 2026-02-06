@@ -2,7 +2,7 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs in a terminal window on Linux of OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use disk images.  For best display results, set your terminal window to 86 x 27.
+This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use disk images.  For best display results, set your terminal window to 86 x 27.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
@@ -64,7 +64,7 @@ Run the executable on a terminal and type the CP/M commands (you can try DIR and
 
 Emulation of the Kaypro 4-84 computer
 
-/===================================Kaypro 4-84====================================\\
+/===================================Kaypro 4-84=====================================\\
 ||                                                                                  ||
 || KAYPRO 63K CP/M Version 2.2G                                                     ||
 ||                                                                                  ||
@@ -89,7 +89,7 @@ Emulation of the Kaypro 4-84 computer
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
-\\================================================ F1 for help ==== F4 to exit ====//```
+\\================================================ F1 for help ==== F4 to exit =====//
 ```
 ### Usage with external images
 You can provide up two disk images as binary files to use as A: and B: drives. If only an image is provided, it will be the A: disk, B: will be a blank disk.
@@ -129,12 +129,11 @@ Emulation of the Kaypro II computer
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
-\\================================================= F1 for help ==== F4 to exit ====//```
+\\================================================= F1 for help ==== F4 to exit ====//
 ```
 ### Online help
 Press F1 to get additional help:
 
-```
 //==================================================================================\\
 ||                                                                                  ||
 || KAYPRO II 64k CP/M vers 2.2                                                      ||
@@ -163,7 +162,6 @@ Press F1 to get additional help:
 ||                                                                                  ||
 ||                                                                                  ||
 \\================================================= F1 for help ==== F4 to exit ====//
-```
 
 ## Build from source
 
