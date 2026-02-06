@@ -104,7 +104,7 @@ If using the Kaypro IV, 4-84, or 4-84 TurboROM configurations, images can be wit
 casa@servidor:~/$ ./izkaypro disks/cpmish.img disks/WordStar33.img 
 B: disks/WordStar33.img
 Kaypro https://github.com/ivanizag/izkaypro
-Emulation of the Kaypro II computer
+```Emulation of the Kaypro II computer
 
 //==================================================================================\
 ||                                                                                  ||
