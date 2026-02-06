@@ -2,7 +2,7 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs in a terminal window. It supports multiple Kaypro models and can boot and use disk images.  For best display results, set your terminal window to 86 x 27.
+This is a Kaypro emulator that runs in a terminal window on Linux of OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use disk images.  For best display results, set your terminal window to 86 x 27.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
@@ -22,6 +22,7 @@ It's a typical CP/M computer of the early 80s, built on a metal case with standa
 - A parallel port (not emulated by izkaypro)
 
 ## Supported Models
+This version of the emulator expands support to the Kaypro 4/83, 2X/4-84, and TurboROM-enabled Kaypro 4-84s.
 
 | Model | ROM | Disk Format | Video Mode |
 |-------|-----|-------------|------------|
@@ -60,9 +61,7 @@ izkaypro does not require installation, you just need the executable. It has the
 
 ### Usage with no arguments
 Run the executable on a terminal and type the CP/M commands (you can try DIR and changing drives with B:). Press F4 to exit back to the host shell prompt.
-```
-casa@servidor:~/$ ./izkaypro
-Kaypro https://github.com/ivanizag/izkaypro
+
 Emulation of the Kaypro 4-84 computer
 
 /===================================Kaypro 4-84====================================\\
@@ -149,7 +148,9 @@ Press F1 to get additional help:
 ||        |  F4: Quit the emulator        |  Insert to LINEFEED            |        ||
 ||        |  F5: Select file for drive A: |                                |        ||
 ||        |  F6: Select file for drive B: |                                |        ||
+||        |  F7: Save BIOS to file        |                                |        ||
 ||        |  F8: Toggle CPU trace         |                                |        ||
+||        |  F9: Set CPU speed (MHz)      |                                |        ||
 ||        +----------------------------------------------------------------+        ||
 ||        |  Loaded images:                                                |        ||
 ||        |  A: CPM/2.2 embedded (transient)                               |        ||

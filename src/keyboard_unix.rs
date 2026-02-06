@@ -15,6 +15,7 @@ pub enum Command {
     ShowStatus,
     TraceCPU,
     SaveMemory,
+    SetSpeed,
 }
 
 pub struct Keyboard {
@@ -164,6 +165,9 @@ impl Keyboard {
                 }
                 "[19~" | "Ol" => { // F8 (Linux, macOS application mode)
                     self.commands.push(Command::TraceCPU);
+                }
+                "[20~" | "Ow" => { // F9 (Linux, macOS application mode)
+                    self.commands.push(Command::SetSpeed);
                 }
                 "[3~" => {
                     // "Delete" key mapped to "DEL"

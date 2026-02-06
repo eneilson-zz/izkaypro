@@ -1,5 +1,6 @@
 use clap::{Arg, App};
 use iz80::*;
+use std::time::{Duration, Instant};
 
 mod config;
 mod kaypro_machine;
@@ -146,6 +147,13 @@ fn main() {
 
     let instructions_per_refresh = if any_trace {256*1024} else {2*1024};
 
+    // Clock speed control: None = unlimited, Some(mhz) = fixed speed
+    // Average ~4 T-states per instruction, so cycles_per_sec = mhz * 1_000_000
+    let mut clock_mhz: Option<f64> = None;
+    let mut cycle_count: u64 = 0;
+    let mut speed_start_time = Instant::now();
+    const CYCLES_PER_INSTRUCTION: u64 = 4; // Average Z80 cycles per instruction
+
     let mut counter: u64 = 1;
     let mut next_signal: u64 = 0;
     let mut done = false;
@@ -153,6 +161,29 @@ fn main() {
 
         cpu.execute_instruction(&mut machine);
         counter += 1;
+        cycle_count += CYCLES_PER_INSTRUCTION;
+
+        // Clock speed throttling
+        if let Some(mhz) = clock_mhz {
+            let target_cycles_per_sec = (mhz * 1_000_000.0) as u64;
+            let elapsed = speed_start_time.elapsed();
+            let expected_cycles = (elapsed.as_secs_f64() * target_cycles_per_sec as f64) as u64;
+            
+            if cycle_count > expected_cycles {
+                // We're running too fast, need to wait
+                let cycles_ahead = cycle_count - expected_cycles;
+                let wait_secs = cycles_ahead as f64 / target_cycles_per_sec as f64;
+                if wait_secs > 0.0001 {
+                    std::thread::sleep(Duration::from_secs_f64(wait_secs));
+                }
+            }
+            
+            // Reset counters periodically to avoid drift
+            if elapsed.as_secs() >= 1 {
+                speed_start_time = Instant::now();
+                cycle_count = 0;
+            }
+        }
 
         // IO refresh
         if counter % instructions_per_refresh == 0 {
@@ -197,6 +228,31 @@ fn main() {
                         trace_cpu = !trace_cpu;
                         cpu.set_trace(trace_cpu);
                         screen.set_in_place(!trace_cpu && !any_trace);
+                    },
+                    Command::SetSpeed => {
+                        let current = match clock_mhz {
+                            Some(mhz) => format!("{:.1}", mhz),
+                            None => "-1".to_string(),
+                        };
+                        let prompt = format!("CPU speed in MHz (1-100, -1=unlimited) [{}]", current);
+                        if let Some(input) = screen.prompt(&mut machine, &prompt) {
+                            let input = input.trim();
+                            if input.is_empty() {
+                                // Keep current setting
+                            } else if let Ok(mhz) = input.parse::<f64>() {
+                                if mhz < 0.0 {
+                                    clock_mhz = None;
+                                } else if mhz >= 1.0 && mhz <= 100.0 {
+                                    // Round to 0.5 MHz resolution
+                                    let rounded = (mhz * 2.0).round() / 2.0;
+                                    clock_mhz = Some(rounded);
+                                    speed_start_time = Instant::now();
+                                    cycle_count = 0;
+                                }
+                                // Invalid range silently ignored
+                            }
+                            // Invalid parse silently ignored
+                        }
                     },
                 }
             }

@@ -230,6 +230,7 @@ impl Screen {
         println!("||        |  F6: Select file for drive B: |                                |        ||");
         println!("||        |  F7: Save BIOS to file        |                                |        ||");
         println!("||        |  F8: Toggle CPU trace         |                                |        ||");
+        println!("||        |  F9: Set CPU speed (MHz)      |                                |        ||");
         println!("||        +----------------------------------------------------------------+        ||");
         println!("||        |  Loaded images:                                                |        ||");
         println!("||        |  A: {:58} |        ||", machine.floppy_controller.media_a().info());
@@ -237,7 +238,7 @@ impl Screen {
         println!("||        +----------------------------------------------------------------+        ||");
 
         if self.in_place {
-            print!("\x1b[{}B", 21-7);
+            print!("\x1b[{}B", 21-8);
         }
     }
 
