@@ -62,9 +62,10 @@ izkaypro does not require installation, you just need the executable. It has the
 ### Usage with no arguments
 Run the executable on a terminal and type the CP/M commands (you can try DIR and changing drives with B:). Press F4 to exit back to the host shell prompt.
 
+```
 Emulation of the Kaypro 4-84 computer
 
-/===================================Kaypro 4-84=====================================\\
+/===================================Kaypro 4-84=====================================\
 ||                                                                                  ||
 || KAYPRO 63K CP/M Version 2.2G                                                     ||
 ||                                                                                  ||
@@ -89,8 +90,9 @@ Emulation of the Kaypro 4-84 computer
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
-\\================================================ F1 for help ==== F4 to exit =====//
+\================================================ F1 for help ==== F4 to exit =====//
 ```
+
 ### Usage with external images
 You can provide up two disk images as binary files to use as A: and B: drives. If only an image is provided, it will be the A: disk, B: will be a blank disk.
 
@@ -104,7 +106,7 @@ B: disks/WordStar33.img
 Kaypro https://github.com/ivanizag/izkaypro
 Emulation of the Kaypro II computer
 
-//==================================================================================\\
+//==================================================================================\
 ||                                                                                  ||
 || CP/Mish 2.2r0 for Kaypro II                                                      ||
 ||                                                                                  ||
@@ -129,12 +131,14 @@ Emulation of the Kaypro II computer
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
-\\================================================= F1 for help ==== F4 to exit ====//
+\================================================= F1 for help ==== F4 to exit ====//
 ```
+
 ### Online help
 Press F1 to get additional help:
 
-//==================================================================================\\
+```
+//==================================================================================\
 ||                                                                                  ||
 || KAYPRO II 64k CP/M vers 2.2                                                      ||
 ||                                                                                  ||
@@ -161,7 +165,8 @@ Press F1 to get additional help:
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
-\\================================================= F1 for help ==== F4 to exit ====//
+\================================================= F1 for help ==== F4 to exit ====//
+```
 
 ## Build from source
 
