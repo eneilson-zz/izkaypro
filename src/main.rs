@@ -170,6 +170,7 @@ fn main() {
 
     let mut counter: u64 = 1;
     let mut nmi_pending = false;
+    let mut nmi_deadline: u64 = 0;
     let mut done = false;
     while !done {
 
@@ -298,16 +299,20 @@ fn main() {
 
         // NMI processing
         // The FDC sets raise_nmi when a command completes or a data byte is
-        // transferred. We latch it as pending and deliver only when the CPU
-        // is HALTed. Standard Kaypro ROMs (81-292a, TurboROM) HALT to wait
-        // for FDC completion; polling-based ROMs (KayPLUS) don't need NMI
-        // since they read FDC status directly.
+        // transferred. We latch it as pending and deliver when:
+        //  1. CPU is HALTed (immediate — standard BIOS FDC loops), OR
+        //  2. Deadline reached AND vector at 0x0066 is safe (fallback for
+        //     programs like DIAG4 that poll FDC without HALTing).
+        // KayPLUS (unsafe vector at 0x0066) only gets NMI via path 1.
         if machine.floppy_controller.raise_nmi {
             machine.floppy_controller.raise_nmi = false;
             nmi_pending = true;
+            nmi_deadline = counter + 10_000_000;
         }
         let mut nmi_signaled = false;
-        if nmi_pending && cpu.is_halted() {
+        if nmi_pending && (cpu.is_halted()
+            || (counter >= nmi_deadline && machine.nmi_vector_is_safe()))
+        {
             cpu.signal_nmi();
             nmi_pending = false;
             nmi_signaled = true;

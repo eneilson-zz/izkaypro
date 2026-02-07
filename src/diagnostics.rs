@@ -494,9 +494,6 @@ pub struct BootTestConfig {
     pub disk_a: &'static str,
     pub disk_b: &'static str,
     pub side1_sector_base: u8,
-    pub trace_fdc: bool,
-    pub trace_io: bool,
-    pub trace_pc: bool,
 }
 
 /// Run boot tests for all supported Kaypro models.
@@ -513,9 +510,6 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_a: "disks/cpm22g-rom292a.img",
             disk_b: "disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
-            trace_fdc: false,
-            trace_io: false,
-            trace_pc: false,
         },
         BootTestConfig {
             name: "Kaypro 4/84 TurboROM",
@@ -525,21 +519,15 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_a: "disks/k484_turborom_63k_boot.img",
             disk_b: "disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
-            trace_fdc: false,
-            trace_io: false,
-            trace_pc: false,
         },
         BootTestConfig {
             name: "KayPLUS 84",
             rom_path: "roms/kplus84.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
             disk_format: crate::media::MediaFormat::DsDd,
-            disk_a: "disks/kayplus1.img",
+            disk_a: "disks/kayplus_boot.img",
             disk_b: "disks/cpm22-kaypro4-blank.img",
-            side1_sector_base: 10,
-            trace_fdc: false,
-            trace_io: false,
-            trace_pc: true,
+            side1_sector_base: 0,
         },
     ];
 
@@ -559,12 +547,12 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
     let mut machine = crate::kaypro_machine::KayproMachine::new(
         cfg.rom_path, cfg.video_mode, fdc, false, false, false,
     );
-    let enable_trace_after_prompt = cfg.trace_fdc || cfg.trace_io;
     let mut cpu = Cpu::new_z80();
 
     let max_instructions: u64 = 200_000_000;
     let mut counter: u64 = 0;
     let mut nmi_pending = false;
+    let mut nmi_deadline: u64 = 0;
     let mut prompt_found = false;
     let mut prompt_at: u64 = 0;
 
@@ -573,128 +561,9 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
     let mut fdc_motor_toggles: u32 = 0;
     let mut last_fdc_motor = false;
 
-    // Warm-boot tracing: after prompt, keep a rolling buffer of recent PCs.
-    // When PC hits 0x0000 (CP/M WBOOT vector), dump the buffer to show what
-    // code path triggered the warm boot.
-    const PC_RING_SIZE: usize = 2000;
-    let mut pc_ring: Vec<(u64, u16, bool, u32)> = Vec::with_capacity(PC_RING_SIZE);
-    let mut pc_ring_pos: usize = 0;
-    let mut pc_ring_full = false;
-    let mut wboot_traces_dumped: u32 = 0;
-    let mut pc_prev: u16 = 0xFFFF;
-
     loop {
         cpu.execute_instruction(&mut machine);
         counter += 1;
-
-        // Warm-boot trigger detection
-        if cfg.trace_pc && prompt_found && wboot_traces_dumped < 2 {
-            let pc = cpu.registers().pc();
-
-            // Only log non-sequential PC transitions, skipping tight backward
-            // loops (JR NZ back by <16 bytes) which fill the ring with delay loops
-            let is_sequential = pc >= pc_prev && pc <= pc_prev.wrapping_add(4);
-            let is_tight_loop = pc < pc_prev && pc_prev.wrapping_sub(pc) < 16;
-            pc_prev = pc;
-
-            if !is_sequential && !is_tight_loop {
-                let entry = (counter, pc, machine.is_rom_rank(), 1u32);
-                if pc_ring.len() < PC_RING_SIZE {
-                    pc_ring.push(entry);
-                } else {
-                    pc_ring[pc_ring_pos] = entry;
-                }
-                pc_ring_pos = (pc_ring_pos + 1) % PC_RING_SIZE;
-                if pc_ring.len() == PC_RING_SIZE {
-                    pc_ring_full = true;
-                }
-            }
-
-            // Detect warm boot via FDC RESTORE command (first thing boot does)
-            // or PC=0x0000 (CP/M WBOOT vector)
-            let fdc_restore = machine.floppy_controller.last_command
-                .take()
-                .map_or(false, |cmd| (cmd & 0xf0) == 0x00);
-            if pc == 0x0000 || fdc_restore {
-                wboot_traces_dumped += 1;
-                println!("\n=== Warm Boot #{} Detected: {} (counter={}) ===", 
-                    wboot_traces_dumped, cfg.name, counter);
-
-                // Dump ring buffer, collapsing repeated sequences
-                let count = if pc_ring_full { PC_RING_SIZE } else { pc_ring.len() };
-                let start_idx = if pc_ring_full { pc_ring_pos } else { 0 };
-
-                // Extract ordered entries
-                let mut entries: Vec<(u64, u16, bool)> = Vec::with_capacity(count);
-                for i in 0..count {
-                    let idx = (start_idx + i) % PC_RING_SIZE;
-                    let (cnt, addr, is_rom, _) = pc_ring[idx];
-                    entries.push((cnt, addr, is_rom));
-                }
-
-                // Detect repeating sequence: find shortest period where the PC
-                // sequence repeats identically
-                let mut period = 0;
-                'outer: for p in 4..count / 3 {
-                    let tail = &entries[count - p..];
-                    let prev = &entries[count - 2 * p..count - p];
-                    if tail.iter().zip(prev.iter()).all(|(a, b)| a.1 == b.1) {
-                        period = p;
-                        break 'outer;
-                    }
-                }
-
-                if period > 0 {
-                    // Find first occurrence of the repeating pattern
-                    let pattern: Vec<u16> = entries[count - period..].iter().map(|e| e.1).collect();
-                    let mut first_repeat = count - period;
-                    while first_repeat >= period {
-                        let candidate: Vec<u16> = entries[first_repeat - period..first_repeat]
-                            .iter().map(|e| e.1).collect();
-                        if candidate != pattern { break; }
-                        first_repeat -= period;
-                    }
-                    let repeats = (count - first_repeat) / period;
-
-                    // Show unique prefix
-                    let prefix_end = first_repeat.min(200);
-                    if first_repeat > prefix_end {
-                        println!("  (skipping {} earlier entries)", first_repeat - prefix_end);
-                    }
-                    for i in (first_repeat - prefix_end)..first_repeat {
-                        let (cnt, addr, is_rom) = entries[i];
-                        let bank = if is_rom { "ROM" } else { "RAM" };
-                        println!("  [{:>10}] PC=0x{:04X} [{}]", cnt, addr, bank);
-                    }
-                    println!("  --- repeating sequence ({} branches, ×{}) ---", period, repeats);
-                    for i in first_repeat..first_repeat + period {
-                        let (cnt, addr, is_rom) = entries[i];
-                        let bank = if is_rom { "ROM" } else { "RAM" };
-                        println!("  [{:>10}] PC=0x{:04X} [{}]", cnt, addr, bank);
-                    }
-                    println!("  --- end repeating sequence ---");
-                } else {
-                    // No repeating pattern, show last 200
-                    let show = count.min(200);
-                    let skip = count - show;
-                    if skip > 0 {
-                        println!("  (skipping {} earlier entries)", skip);
-                    }
-                    for i in 0..show {
-                        let idx = (start_idx + skip + i) % PC_RING_SIZE;
-                        let (cnt, addr, is_rom, _) = pc_ring[idx];
-                        let bank = if is_rom { "ROM" } else { "RAM" };
-                        println!("  [{:>10}] PC=0x{:04X} [{}]", cnt, addr, bank);
-                    }
-                }
-                println!("=== End Warm Boot Trace ===\n");
-
-                // Reset ring for next warm boot capture
-                pc_ring.clear();
-                pc_ring_pos = 0;
-                pc_ring_full = false;
-            }
-        }
 
         // SIO interrupt processing (keyboard)
         if counter % 1024 == 0 {
@@ -715,9 +584,12 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         if machine.floppy_controller.raise_nmi {
             machine.floppy_controller.raise_nmi = false;
             nmi_pending = true;
+            nmi_deadline = counter + 10_000_000;
         }
         let mut nmi_signaled = false;
-        if nmi_pending && cpu.is_halted() {
+        if nmi_pending && (cpu.is_halted()
+            || (counter >= nmi_deadline && machine.nmi_vector_is_safe()))
+        {
             cpu.signal_nmi();
             nmi_pending = false;
             nmi_signaled = true;
@@ -744,19 +616,6 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
                 prompt_found = true;
                 prompt_at = counter;
                 last_fdc_motor = machine.floppy_controller.motor_on;
-                if enable_trace_after_prompt {
-                    if cfg.trace_fdc {
-                        machine.floppy_controller.trace = true;
-                    }
-                    if cfg.trace_io {
-                        machine.trace_io = true;
-                    }
-                }
-                if cfg.trace_pc {
-                    let screen = extract_vram_text(&machine, 10);
-                    println!("PC trace: prompt found at counter={}", counter);
-                    println!("PC trace: VRAM:\n{}", screen.replace('|', "\n"));
-                }
             }
         }
 

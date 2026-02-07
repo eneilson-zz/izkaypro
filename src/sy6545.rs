@@ -289,9 +289,12 @@ impl Sy6545 {
                 if value >= 0x20 && value < 0x7f { value as char } else { '.' });
         }
         
-        // Note: We do NOT auto-increment addr_latch here.
-        // The ROM explicitly sets R18:R19 before each access.
-        // Auto-increment only happens when accessing R31 via port 0x1D.
+        // Auto-increment addr_latch after each VIDMEM access.
+        // The SY6545 transparent addressing mode increments the update address
+        // after each data port access. The 81-292a ROM re-programs R18:R19
+        // before each access (so increment is harmless), while the KayPLUS ROM
+        // relies on auto-increment for consecutive VRAM writes.
+        self.addr_latch = self.addr_latch.wrapping_add(1);
     }
     
     /// Port 0x1F read - VIDMEM (Video Memory Data)
@@ -306,6 +309,7 @@ impl Sy6545 {
                 if value >= 0x20 && value < 0x7f { value as char } else { '.' });
         }
         
+        self.addr_latch = self.addr_latch.wrapping_add(1);
         value
     }
     

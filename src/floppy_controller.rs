@@ -47,9 +47,6 @@ pub struct FloppyController {
     pub raise_nmi: bool,
     pub trace: bool,
     pub trace_rw: bool,
-
-    /// Last command byte written via put_command (for external observation)
-    pub last_command: Option<u8>,
 }
 
 #[derive(Copy, Clone)]
@@ -137,7 +134,6 @@ impl FloppyController {
             raise_nmi: false,
             trace,
             trace_rw,
-            last_command: None,
         }
     }
     
@@ -209,7 +205,6 @@ impl FloppyController {
     }
 
     pub fn put_command(&mut self, command: u8) {
-        self.last_command = Some(command);
         self.media_selected().flush_disk();
 
         if (command & 0xf0) == 0x00 {

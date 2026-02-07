@@ -165,7 +165,6 @@ impl KayproMachine {
     /// at that address (as currently mapped) to determine whether it is a
     /// proper NMI handler (RET / RETN) or unrelated code (e.g. KayPLUS
     /// checksum loop). Standard Kaypro ROMs all have RET (0xC9) at 0x0066.
-    #[allow(dead_code)]
     pub fn nmi_vector_is_safe(&self) -> bool {
         let b0 = self.peek(0x0066);
         if b0 == 0xC9 { // RET

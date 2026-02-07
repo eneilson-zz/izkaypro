@@ -23,6 +23,9 @@ pub enum KayproModel {
     /// Kaypro 4/84 with TurboROM 3.4 - DSDD, SY6545 CRTC
     #[serde(rename = "turbo_rom")]
     TurboRom,
+    /// Kaypro 4/84 with KayPLUS replacement BIOS - DSDD, SY6545 CRTC
+    #[serde(rename = "kayplus_84")]
+    KayPlus84,
     /// Custom configuration (use rom_file, disk_format, video_mode)
     #[serde(rename = "custom")]
     Custom,
@@ -165,6 +168,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "roms/81-232.rom",
             KayproModel::Kaypro4_84 => "roms/81-292a.rom",
             KayproModel::TurboRom => "roms/trom34.rom",
+            KayproModel::KayPlus84 => "roms/kplus84.rom",
             KayproModel::Custom => self.rom_file.as_deref().unwrap_or("roms/81-292a.rom"),
         }
     }
@@ -176,6 +180,7 @@ impl Config {
             KayproModel::Kaypro4_83 => VideoMode::MemoryMapped,
             KayproModel::Kaypro4_84 => VideoMode::Sy6545Crtc,
             KayproModel::TurboRom => VideoMode::Sy6545Crtc,
+            KayproModel::KayPlus84 => VideoMode::Sy6545Crtc,
             KayproModel::Custom => self.video_mode.into(),
         }
     }
@@ -187,6 +192,7 @@ impl Config {
             KayproModel::Kaypro4_83 => MediaFormat::DsDd,
             KayproModel::Kaypro4_84 => MediaFormat::DsDd,
             KayproModel::TurboRom => MediaFormat::DsDd,
+            KayproModel::KayPlus84 => MediaFormat::DsDd,
             KayproModel::Custom => self.disk_format.into(),
         }
     }
@@ -196,8 +202,9 @@ impl Config {
     /// KayPLUS-formatted disks use 0 (sectors 0-9 on both sides).
     pub fn get_side1_sector_base(&self) -> u8 {
         match self.model {
+            KayproModel::KayPlus84 => 0,
             KayproModel::Custom => self.side1_sector_base.unwrap_or(10),
-            _ => 10, // All standard models use 10-19 for side 1
+            _ => 10,
         }
     }
     
@@ -208,6 +215,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "disks/k484-cpm22f-boot.img",
             KayproModel::Kaypro4_84 => "disks/cpm22g-rom292a.img",
             KayproModel::TurboRom => "disks/k484_turborom_63k_boot.img",
+            KayproModel::KayPlus84 => "disks/kayplus_boot.img",
             KayproModel::Custom => self.disk_a.as_deref().unwrap_or("disks/k484-cpm22f-boot.img"),
         }
     }
@@ -219,6 +227,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "disks/cpm22-kaypro4-blank.img",
             KayproModel::Kaypro4_84 => "disks/cpm22-kaypro4-blank.img",
             KayproModel::TurboRom => "disks/cpm22-kaypro4-blank.img",
+            KayproModel::KayPlus84 => "disks/cpm22-kaypro4-blank.img",
             KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/cpm22-kaypro4-blank.img"),
         }
     }
@@ -230,6 +239,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "Kaypro 4/83 (DSDD, 81-232 ROM)".to_string(),
             KayproModel::Kaypro4_84 => "Kaypro 2X/4/84 (DSDD, 81-292a ROM)".to_string(),
             KayproModel::TurboRom => "Kaypro 4/84 TurboROM 3.4 (DSDD)".to_string(),
+            KayproModel::KayPlus84 => "Kaypro 4/84 KayPLUS (DSDD)".to_string(),
             KayproModel::Custom => format!("Custom ({})", self.get_rom_path()),
         }
     }
@@ -241,6 +251,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "Kaypro 4/83",
             KayproModel::Kaypro4_84 => "Kaypro 4-84",
             KayproModel::TurboRom => "Kaypro 4-84 TurboROM",
+            KayproModel::KayPlus84 => "Kaypro 4-84 KayPLUS",
             KayproModel::Custom => "Custom Kaypro",
         }
     }
