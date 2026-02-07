@@ -225,6 +225,10 @@ impl Media {
         }
     }
 
+    pub fn is_write_protected(&self) -> bool {
+        self.file.is_none()
+    }
+
     pub fn info(&self) -> String {
         self.name.clone() + " (" +
             match self.file {

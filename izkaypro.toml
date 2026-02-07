@@ -36,8 +36,8 @@ model = "kaypro4_84"
 
 # --- Custom configuration ---
 # model = "custom"
-# rom_file = "roms/trom34.rom"
+# rom_file = "roms/kplus84.rom"
 # video_mode = "sy6545"
 # disk_format = "dsdd"
-# disk_a = "disks/k484_turborom_63k_boot.img"
+# disk_a = "disks/kayplus1.img"
 # disk_b = "disks/cpm22-kaypro4-blank.img"

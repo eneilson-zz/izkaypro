@@ -222,7 +222,14 @@ fn main() {
                         }
                     }
                     Command::SaveMemory => {
-                        machine.save_bios()
+                        match machine.save_bios() {
+                            Ok(filename) => {
+                                screen.message(&mut machine, &format!("BIOS saved as {}", filename));
+                            }
+                            Err(err) => {
+                                screen.message(&mut machine, &format!("Error: {}", err));
+                            }
+                        }
                     }
                     Command::TraceCPU => {
                         trace_cpu = !trace_cpu;

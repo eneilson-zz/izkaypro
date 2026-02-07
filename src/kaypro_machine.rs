@@ -263,13 +263,22 @@ impl KayproMachine {
         self.port14_raw
     }
 
-    pub fn save_bios(&self) {
+    pub fn save_bios(&self) -> Result<String, String> {
         let start = self.ram[1] as usize +
             ((self.ram[2] as usize) << 8) - 3;
         let end = 0xfc00;
+        
+        if start >= end {
+            return Err(format!("Invalid BIOS range: 0x{:04X}-0x{:04X}", start, end));
+        }
 
-        let mut file = File::create(format!("bios_{:x}.bin", start),).unwrap();
-        file.write_all(&self.ram[start..end]).unwrap();
+        let filename = format!("bios_{:x}.bin", start);
+        let mut file = File::create(&filename)
+            .map_err(|e| format!("Failed to create {}: {}", filename, e))?;
+        file.write_all(&self.ram[start..end])
+            .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
+        
+        Ok(filename)
     }
 }
 
