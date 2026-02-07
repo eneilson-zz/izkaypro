@@ -72,6 +72,9 @@ fn main() {
             .short("d")
             .long("diagnostics")
             .help("Run ROM and RAM diagnostics then exit"))
+        .arg(Arg::with_name("boot_test")
+            .long("boot-test")
+            .help("Run headless boot tests for all Kaypro models then exit"))
         .get_matches();
 
     // Command line disk overrides (or use config defaults)
@@ -95,6 +98,7 @@ fn main() {
     let trace_bdos = matches.is_present("bdos_trace");
     let trace_crtc = matches.is_present("crtc_trace");
     let run_diag = matches.is_present("run_diag");
+    let run_boot_test = matches.is_present("boot_test");
 
     let any_trace = trace_io
         || trace_cpu
@@ -110,6 +114,7 @@ fn main() {
         &disk_a_path,
         &disk_b_path,
         config.get_disk_format(),
+        config.get_side1_sector_base(),
         trace_fdc,
         trace_fdc_rw,
     );
@@ -124,6 +129,15 @@ fn main() {
     );
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);
+
+    // Run boot tests if requested
+    if run_boot_test {
+        println!("Running boot tests for all Kaypro models...\n");
+        let results = diagnostics::run_boot_tests();
+        diagnostics::print_results(&results);
+        let all_passed = results.iter().all(|r| r.passed);
+        std::process::exit(if all_passed { 0 } else { 1 });
+    }
 
     // Run diagnostics if requested
     if run_diag {
@@ -155,7 +169,7 @@ fn main() {
     const CYCLES_PER_INSTRUCTION: u64 = 4; // Average Z80 cycles per instruction
 
     let mut counter: u64 = 1;
-    let mut next_signal: u64 = 0;
+    let mut nmi_pending = false;
     let mut done = false;
     while !done {
 
@@ -267,25 +281,37 @@ fn main() {
             machine.keyboard.commands.clear();
         }
 
+        // SIO interrupt processing (keyboard)
+        if counter % 1024 == 0 {
+            let i_reg = cpu.registers().get8(Reg8::I);
+            if let Some(handler) = machine.sio_check_interrupt(i_reg) {
+                let regs = cpu.registers();
+                let pc = regs.pc();
+                let mut sp = regs.get16(Reg16::SP);
+                sp = sp.wrapping_sub(2);
+                regs.set16(Reg16::SP, sp);
+                machine.poke(sp, pc as u8);
+                machine.poke(sp.wrapping_add(1), (pc >> 8) as u8);
+                cpu.registers().set_pc(handler);
+            }
+        }
+
         // NMI processing
+        // The FDC sets raise_nmi when a command completes or a data byte is
+        // transferred. We latch it as pending and deliver only when the CPU
+        // is HALTed. Standard Kaypro ROMs (81-292a, TurboROM) HALT to wait
+        // for FDC completion; polling-based ROMs (KayPLUS) don't need NMI
+        // since they read FDC status directly.
         if machine.floppy_controller.raise_nmi {
             machine.floppy_controller.raise_nmi = false;
-            next_signal = counter + 10_000_000;
+            nmi_pending = true;
         }
         let mut nmi_signaled = false;
-        if next_signal != 0 && counter >= next_signal {
+        if nmi_pending && cpu.is_halted() {
             cpu.signal_nmi();
-            next_signal = 0;
+            nmi_pending = false;
             nmi_signaled = true;
         }
-        if next_signal != 0 && cpu.is_halted() {
-            // CPU is halted waiting for interrupt - signal NMI immediately
-            cpu.signal_nmi();
-            next_signal = 0;
-            nmi_signaled = true;
-        }
-        // Only check for uninterruptible halt if we didn't just signal NMI
-        // (the CPU needs at least one cycle to process the NMI and exit HALT)
         if !nmi_signaled && cpu.is_halted() {
             screen.update(&mut machine, true);
             println!("HALT instruction that will never be interrupted");

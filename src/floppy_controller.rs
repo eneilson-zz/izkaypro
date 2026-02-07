@@ -25,8 +25,8 @@ pub struct FloppyController {
 
     media: [Media ;2],
 
-    read_index: usize,
-    read_last: usize,
+    pub read_index: usize,
+    pub read_last: usize,
 
     data_buffer: Vec<u8>,
 
@@ -38,9 +38,18 @@ pub struct FloppyController {
     // Index pulse simulation - counter for toggling index bit
     status_read_count: u32,
 
+    // READ ADDRESS busy countdown: when >0, BUSY remains set.
+    // Decremented on each status read; when it reaches 0, BUSY clears
+    // and the completion NMI fires. This allows both polling-based ROMs
+    // (KayPLUS) and NMI-driven ROMs (81-292a) to work correctly.
+    read_address_countdown: u8,
+
     pub raise_nmi: bool,
     pub trace: bool,
-    pub trace_rw: bool
+    pub trace_rw: bool,
+
+    /// Last command byte written via put_command (for external observation)
+    pub last_command: Option<u8>,
 }
 
 #[derive(Copy, Clone)]
@@ -59,11 +68,13 @@ pub enum FDCStatus {
 }
 
 impl FloppyController {
-    /// Create a new floppy controller with specified disk images and format
+    /// Create a new floppy controller with specified disk images and format.
+    /// `side1_sector_base`: sector ID base for side 1 headers (10 = standard Kaypro, 0 = KayPLUS).
     pub fn new(
         disk_a_path: &str,
         disk_b_path: &str,
         default_format: MediaFormat,
+        side1_sector_base: u8,
         trace: bool,
         trace_rw: bool,
     ) -> FloppyController {
@@ -96,6 +107,7 @@ impl FloppyController {
                     name: disk_a_name,
                     content: disk_a_content,
                     format: default_format,
+                    side1_sector_base,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -104,6 +116,7 @@ impl FloppyController {
                     name: disk_b_name,
                     content: disk_b_content,
                     format: default_format,
+                    side1_sector_base,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -119,10 +132,12 @@ impl FloppyController {
             multi_sector: false,
 
             status_read_count: 0,
+            read_address_countdown: 0,
 
             raise_nmi: false,
             trace,
             trace_rw,
+            last_command: None,
         }
     }
     
@@ -194,6 +209,7 @@ impl FloppyController {
     }
 
     pub fn put_command(&mut self, command: u8) {
+        self.last_command = Some(command);
         self.media_selected().flush_disk();
 
         if (command & 0xf0) == 0x00 {
@@ -349,44 +365,39 @@ impl FloppyController {
             let track = self.head_position; // Use physical head position
             let sector = self.sector;
 
-            let (valid, _base_sector_id) = self.media_selected().read_address(side_2, track, sector);
+            let (valid, base_sector_id) = self.media_selected().read_address(side_2, track, sector);
             if valid {
-                // Simulate disk rotation - return different sector IDs each time
-                // This is needed for Turbo ROM which polls READ ADDRESS to find sectors
-                // Use status_read_count to rotate through sectors 0-9 (side 0) or 10-19 (side 1)
                 let rotation_pos = (self.status_read_count / 10) as u8 % 10;
-                let sector_id = if side_2 {
-                    10 + rotation_pos  // Sectors 10-19 on side 1
-                } else {
-                    rotation_pos       // Sectors 0-9 on side 0
-                };
+                let sector_id = base_sector_id + rotation_pos;
                 
                 if self.trace {
                     println!("FDC: Read address ({},{},{}) -> sector_id={}", side_2, track, sector, sector_id);
                 }
-                // Note: Real WD1793 does NOT modify sector register during READ ADDRESS
-                self.status = FDCStatus::NoError as u8;
+                // WD1793 datasheet: "The track address of the ID field is written
+                // into the sector register so that a comparison can be made by the user."
+                self.sector = self.head_position;
                 self.data_buffer.clear();
-                self.data_buffer.push(self.head_position); // Physical track from sector header
-                self.data_buffer.push(0); // Kaypro 4-84: head byte is always 0 in sector ID
+                self.data_buffer.push(self.head_position);
+                self.data_buffer.push(0);
                 self.data_buffer.push(sector_id);
-                self.data_buffer.push(2); // For sector size 512
-                self.data_buffer.push(0xde); // CRC 1
-                self.data_buffer.push(0xad); // CRC 2
+                self.data_buffer.push(2);
+                self.data_buffer.push(0xde);
+                self.data_buffer.push(0xad);
+                // Set BUSY - the real WD1793 stays busy while scanning for the
+                // next sector ID. BUSY clears after the ID field is read.
+                // We use a countdown decremented on status reads so that
+                // polling ROMs (KayPLUS) see BUSY for a realistic duration.
+                self.status = FDCStatus::Busy as u8;
+                self.read_address_countdown = 10;
+                self.raise_nmi = true;
             } else {
                 if self.trace {
                     println!("FDC: Read address ({},{},{}) = Error", side_2, track, sector);
                 }
                 self.status = FDCStatus::SeekErrorOrRecordNotFound as u8;
-                self.data_buffer.push(0);
-                self.data_buffer.push(0);
-                self.data_buffer.push(0);
-                self.data_buffer.push(0);
-                self.data_buffer.push(0);
-                self.data_buffer.push(0);
-                self.data_buffer.push(0);
+                self.read_address_countdown = 0;
+                self.raise_nmi = true;
             }
-            self.raise_nmi = true;
         } else if (command & 0xf0) == 0xd0 {
             // FORCE INTERRUPT command, type IV
             // 1101_IIII
@@ -404,6 +415,7 @@ impl FloppyController {
             self.read_last = 0;
             self.data_buffer.clear();
             self.multi_sector = false;
+            self.read_address_countdown = 0;
             self.status &= !(FDCStatus::Busy as u8);
 
             // I3: Immediate interrupt
@@ -443,28 +455,29 @@ impl FloppyController {
     }
 
     pub fn get_status(&mut self) -> u8 {
-        // Consume data if queued
-        self.get_data();
-
-        // Simulate index pulse (bit 1) when motor is on
-        // At 300 RPM, one rotation = 200ms, index pulse duration ~2-4ms
-        // We simulate it by toggling every N status reads (timing not critical)
         self.status_read_count = self.status_read_count.wrapping_add(1);
-        let index_pulse = if self.motor_on {
-            // Pulse is active for a short period (~5% of rotation cycle)
-            (self.status_read_count % 100) < 5
-        } else {
-            false
-        };
+
+        // READ ADDRESS busy countdown: the WD1793 stays BUSY while scanning
+        // for the next sector ID field. We decrement on each status poll;
+        // when it reaches 0, BUSY clears and the completion NMI fires.
+        if self.read_address_countdown > 0 {
+            self.read_address_countdown -= 1;
+            if self.read_address_countdown == 0 {
+                self.status = FDCStatus::NoError as u8;
+            }
+        }
 
         let mut status = self.status;
-        // For Type II/III commands, set DRQ (S1) when data transfer is active
-        if (self.status & FDCStatus::Busy as u8 != 0) && 
-           (self.read_index < self.read_last || !self.data_buffer.is_empty() || self.write_track_active) {
-            status |= FDCStatus::DataRequest as u8;
-        }
-        if index_pulse {
-            status |= 0x02; // Set Index bit (bit 1)
+        if self.status & FDCStatus::Busy as u8 != 0 {
+            // Type II/III status: bit 1 = DRQ (data ready for CPU to read/write)
+            if self.read_index < self.read_last || !self.data_buffer.is_empty() || self.write_track_active {
+                status |= FDCStatus::DataRequest as u8;
+            }
+        } else {
+            // Type I status (or idle): bit 1 = Index pulse
+            if self.motor_on && (self.status_read_count % 100) < 5 {
+                status |= 0x02;
+            }
         }
         status
     }

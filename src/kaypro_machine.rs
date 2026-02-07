@@ -89,7 +89,13 @@ pub struct KayproMachine {
     pub video_mode: VideoMode,
     pub crtc: Sy6545,
 
-    trace_io: bool,
+    // SIO state for interrupt-driven keyboard (KayPLUS)
+    sio_b_wr_select: u8,   // Next WR register to write (set by WR0 pointer bits)
+    pub sio_b_wr1: u8,     // WR1: interrupt enable/mode
+    pub sio_b_wr2: u8,     // WR2: interrupt vector (channel B only)
+    pub sio_int_pending: bool, // SIO interrupt waiting to be serviced
+
+    pub trace_io: bool,
     trace_system_bits: bool,
 
     pub keyboard: Keyboard,
@@ -128,6 +134,10 @@ impl KayproMachine {
             port14_raw: 0xDF, // Initial value for 81-292a (ROM mode, drive A, motor on)
             video_mode,
             crtc,
+            sio_b_wr_select: 0,
+            sio_b_wr1: 0,
+            sio_b_wr2: 0,
+            sio_int_pending: false,
             trace_io,
             trace_system_bits,
             keyboard: Keyboard::new(),
@@ -148,6 +158,30 @@ impl KayproMachine {
     
     pub fn is_rom_rank(&self) -> bool {
         self.system_bits & SystemBit::Bank as u8 != 0
+    }
+
+    /// Check if delivering an NMI right now is safe.
+    /// The Z80 NMI always vectors to 0x0066. We check the actual byte(s)
+    /// at that address (as currently mapped) to determine whether it is a
+    /// proper NMI handler (RET / RETN) or unrelated code (e.g. KayPLUS
+    /// checksum loop). Standard Kaypro ROMs all have RET (0xC9) at 0x0066.
+    #[allow(dead_code)]
+    pub fn nmi_vector_is_safe(&self) -> bool {
+        let b0 = self.peek(0x0066);
+        if b0 == 0xC9 { // RET
+            return true;
+        }
+        let b1 = self.peek(0x0067);
+        if b0 == 0xED && b1 == 0x45 { // RETN
+            return true;
+        }
+        if b0 == 0xC3 { // JP nn — safe if target is in RAM
+            let target = self.peek(0x0067) as u16 | ((self.peek(0x0068) as u16) << 8);
+            if !self.is_rom_rank() || (target as usize) >= self.rom.len() {
+                return true;
+            }
+        }
+        false
     }
 
     fn update_system_bits(&mut self, bits: u8) {
@@ -263,6 +297,82 @@ impl KayproMachine {
         self.port14_raw
     }
 
+    fn sio_b_write_control(&mut self, value: u8) {
+        let reg = self.sio_b_wr_select;
+        match reg {
+            0 => {
+                // WR0: register pointer and command bits
+                // Bits 2-0: register pointer for next write
+                self.sio_b_wr_select = value & 0x07;
+                // Bits 5-3: command (channel reset, etc.)
+                let cmd = (value >> 3) & 0x07;
+                if cmd == 3 {
+                    // Channel reset
+                    self.sio_b_wr1 = 0;
+                    self.sio_b_wr_select = 0;
+                }
+            }
+            1 => {
+                // WR1: interrupt enable/mode
+                // Bits 4-3: Rx interrupt mode
+                //   00 = Rx INT disabled
+                //   01 = Rx INT on first char
+                //   10 = Rx INT on all chars (parity affects vector)
+                //   11 = Rx INT on all chars (parity does NOT affect vector)
+                self.sio_b_wr1 = value;
+                self.sio_b_wr_select = 0;
+                if self.trace_io {
+                    let rx_mode = (value >> 3) & 0x03;
+                    println!("SIO B: WR1=0x{:02X} (Rx INT mode={})", value, rx_mode);
+                }
+            }
+            2 => {
+                // WR2: interrupt vector (channel B only)
+                self.sio_b_wr2 = value;
+                self.sio_b_wr_select = 0;
+                if self.trace_io {
+                    println!("SIO B: WR2=0x{:02X} (interrupt vector)", value);
+                }
+            }
+            _ => {
+                // WR3-WR7: other config, not needed for interrupt emulation
+                self.sio_b_wr_select = 0;
+            }
+        }
+    }
+
+    /// Check if the SIO should generate an interrupt for keyboard input.
+    /// Returns the IM2 vector address if an interrupt should fire, or None.
+    pub fn sio_check_interrupt(&mut self, i_reg: u8) -> Option<u16> {
+        // Only fire if Rx interrupts are enabled (WR1 bits 4-3 != 00)
+        let rx_int_mode = (self.sio_b_wr1 >> 3) & 0x03;
+        if rx_int_mode == 0 {
+            return None;
+        }
+
+        if self.sio_int_pending {
+            return None;
+        }
+
+        if !self.keyboard.is_key_pressed() {
+            return None;
+        }
+
+        self.sio_int_pending = true;
+
+        // IM2 vector: I register << 8 | modified WR2
+        // Channel B Rx Available: vector bits 3,2,1 = 010
+        let vector_byte = (self.sio_b_wr2 & 0xF1) | 0x04;
+        let vector_addr = (i_reg as u16) << 8 | vector_byte as u16;
+
+        // Read the handler address from the vector table
+        let handler_lo = self.ram[vector_addr as usize] as u16;
+        let handler_hi = self.ram[vector_addr.wrapping_add(1) as usize] as u16;
+        let handler = handler_hi << 8 | handler_lo;
+
+        Some(handler)
+    }
+
     pub fn save_bios(&self) -> Result<String, String> {
         let start = self.ram[1] as usize +
             ((self.ram[2] as usize) << 8) - 3;
@@ -331,6 +441,9 @@ impl Machine for KayproMachine {
             println!("OUT(0x{:02x} '{}', 0x{:02x}): ", port, IO_PORT_NAMES[port as usize], value);
         }
         match port {
+            // SIO control ports
+            0x06 => {} // SIO A control - ignored for now
+            0x07 => self.sio_b_write_control(value),
             // Floppy controller
             0x10 => self.floppy_controller.put_command(value),
             0x11 => self.floppy_controller.put_track(value),
@@ -388,8 +501,15 @@ impl Machine for KayproMachine {
 
         let value = match port {
 
-            0x05 => self.keyboard.get_key(),
-            0x07 => (if self.keyboard.is_key_pressed() {1} else {0}) + 0x04,
+            0x05 => {
+                self.sio_int_pending = false;
+                self.keyboard.get_key()
+            },
+            0x07 => {
+                // SIO B RR0: bit 0 = Rx char available, bit 2 = Tx buffer empty
+                let rx_ready = if self.keyboard.is_key_pressed() { 1 } else { 0 };
+                rx_ready | 0x04
+            },
 
             // Floppy controller
             0x10 => self.floppy_controller.get_status(),

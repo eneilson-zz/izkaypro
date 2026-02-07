@@ -100,6 +100,11 @@ pub struct Config {
     /// Disk format (only used if model is Custom)
     pub disk_format: DiskFormatConfig,
     
+    /// Sector ID base for side 1 (only used if model is Custom)
+    /// 10 = standard Kaypro (sectors 10-19 on side 1)
+    /// 0 = KayPLUS format (sectors 0-9 on both sides)
+    pub side1_sector_base: Option<u8>,
+    
     /// Disk image for drive A (optional, overrides model default)
     pub disk_a: Option<String>,
     
@@ -114,6 +119,7 @@ impl Default for Config {
             rom_file: None,
             video_mode: VideoModeConfig::default(),
             disk_format: DiskFormatConfig::default(),
+            side1_sector_base: None,
             disk_a: None,
             disk_b: None,
         }
@@ -182,6 +188,16 @@ impl Config {
             KayproModel::Kaypro4_84 => MediaFormat::DsDd,
             KayproModel::TurboRom => MediaFormat::DsDd,
             KayproModel::Custom => self.disk_format.into(),
+        }
+    }
+    
+    /// Get the side 1 sector ID base for this configuration.
+    /// Standard Kaypro disks use 10 (sectors 10-19 on side 1).
+    /// KayPLUS-formatted disks use 0 (sectors 0-9 on both sides).
+    pub fn get_side1_sector_base(&self) -> u8 {
+        match self.model {
+            KayproModel::Custom => self.side1_sector_base.unwrap_or(10),
+            _ => 10, // All standard models use 10-19 for side 1
         }
     }
     

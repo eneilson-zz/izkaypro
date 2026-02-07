@@ -29,15 +29,16 @@
 # model = "kaypro4_83"
 
 # --- Kaypro 4/84 (default) ---
-model = "kaypro4_84"
+# model = "kaypro4_84"
 
 # --- TurboROM 3.4 ---
 # model = "turbo_rom"
 
 # --- Custom configuration ---
-# model = "custom"
-# rom_file = "roms/kplus84.rom"
-# video_mode = "sy6545"
-# disk_format = "dsdd"
-# disk_a = "disks/kayplus1.img"
-# disk_b = "disks/cpm22-kaypro4-blank.img"
+ model = "custom"
+ rom_file = "roms/kplus84.rom"
+ video_mode = "sy6545"
+ disk_format = "dsdd"
+ side1_sector_base = 0
+ disk_a = "disks/kayplus1.img"
+ disk_b = "disks/cpm22-kaypro4-blank.img"

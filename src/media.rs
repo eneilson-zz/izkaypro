@@ -60,6 +60,10 @@ pub struct Media {
     pub name: String,
     pub content: Vec<u8>,
     pub format: MediaFormat,
+    /// Sector ID base for side 1 headers, reflecting how the disk was physically formatted.
+    /// Standard Kaypro disks: 10 (sector IDs 10-19 on side 1)
+    /// KayPLUS-formatted disks: 0 (sector IDs 0-9 on both sides)
+    pub side1_sector_base: u8,
 
     pub write_min: usize,
     pub write_max: usize,
@@ -172,41 +176,42 @@ impl Media {
         }
 
         // READ ADDRESS returns the sector ID from the next sector header encountered.
-        // For format detection, we just need to return a valid sector ID for the current side.
-        // Side 0: sector IDs 0-9, Side 1: sector IDs 10-19
-        let sector_id = if side_2 {
-            10  // First sector on side 1
-        } else {
-            0   // First sector on side 0
-        };
-        (true, sector_id)
+        // The base sector ID for side 1 depends on how the disk was physically formatted:
+        //   Standard Kaypro: side 0 = 0-9, side 1 = 10-19
+        //   KayPLUS format:  side 0 = 0-9, side 1 = 0-9
+        let base = if side_2 { self.side1_sector_base } else { 0 };
+        (true, base)
     }
 
     pub fn sector_index(&self, side_2: bool, track: u8, sector: u8) -> (bool, usize, usize) {
-        // Validate side, track and sector
         if side_2 && !self.double_sided() {
-            // Side 2 in a single-sided disk
             return (false, 0, 0);
         }
         if track >= self.tracks() {
-            // Track out of range
             return (false, 0, 0);
         }
-        if !side_2 && sector >= self.sectors_per_side() {
-            // Sector out of range for side 0 (sectors 0-9)
+
+        // Map the FDC sector ID to the disk image offset.
+        // The disk image stores sectors as: track0_side0(0-9), track0_side1(10-19), ...
+        // The FDC sector register may contain either:
+        //   - 0-9 for side 0, 10-19 for side 1 (standard Kaypro format)
+        //   - 0-9 for both sides (KayPLUS format, side selected via port 14)
+        // When side 1 is selected and sector < 10, remap by adding sectors_per_side
+        // to get the correct disk image position.
+        let mapped_sector = if side_2 && sector < self.sectors_per_side() {
+            sector + self.sectors_per_side()
+        } else {
+            sector
+        };
+
+        if !side_2 && mapped_sector >= self.sectors_per_side() {
             return (false, 0, 0);
         }
-        if side_2 && sector < self.sectors_per_side() {
-            // Sector ID too low for side 1 (expects 10-19)
+        if side_2 && mapped_sector >= self.sectors() {
             return (false, 0, 0);
         }
-        if side_2 && sector >= self.sectors() {
-            // Sector out of range for side 1 (sectors 10-19)
-            return (false, 0, 0);
-        }
-    
-        // Compute the index
-        let index = (track as usize * self.sectors() as usize + sector as usize) * SECTOR_SIZE;
+
+        let index = (track as usize * self.sectors() as usize + mapped_sector as usize) * SECTOR_SIZE;
         let last = index + SECTOR_SIZE;
         (true, index, last)
     }
