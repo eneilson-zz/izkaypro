@@ -223,7 +223,7 @@ impl Config {
     /// Get the default disk B path for this configuration
     pub fn get_default_disk_b(&self) -> &str {
         match self.model {
-            KayproModel::KayproII => "disks/blank.img",
+            KayproModel::KayproII => "disks/cpm22-rom149-blank.img",
             KayproModel::Kaypro4_83 => "disks/cpm22-kaypro4-blank.img",
             KayproModel::Kaypro4_84 => "disks/cpm22-kaypro4-blank.img",
             KayproModel::TurboRom => "disks/cpm22-kaypro4-blank.img",

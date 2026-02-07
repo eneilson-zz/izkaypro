@@ -66,14 +66,14 @@ izkaypro does not require installation, you just need the executable. It has the
 ### Usage with no arguments
 Run the executable on a terminal and type the CP/M commands (you can try DIR and changing drives with B:). Press F4 to exit back to the host shell prompt.
 
-```
+<pre style="background:#0a0a0a; color:#20BE55; font-family:'Terminus',monospace; padding:16px; border-radius:8px; overflow-x:auto; line-height:1.3;">
 Emulation of the Kaypro 4-84 computer
 
 /===================================Kaypro 4-84=====================================\
 ||                                                                                  ||
 || KAYPRO 63K CP/M Version 2.2G                                                     ||
 ||                                                                                  ||
-|| A0>dir                                                                           ||
+|| A0&gt;dir                                                                           ||
 || A: ASM      COM : CONFIG   COM : COPY     COM : D        COM                     ||
 || A: DDT      COM : DISK7    COM : LOAD     COM : MAKE     COM                     ||
 || A: MFDISK   COM : MOVCPM   COM : PIP      COM : STAT     COM                     ||
@@ -86,7 +86,7 @@ Emulation of the Kaypro 4-84 computer
 || A: LASM     COM : LSWEEP   COM : MLOAD    COM : UNCR     COM                     ||
 || A: MBASIC   COM : OBASIC   COM : KAYCLK   COM : COPYSS   COM                     ||
 || A: ACCESS   COM                                                                  ||
-|| A0>                                                                              ||
+|| A0&gt;                                                                              ||
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
@@ -95,7 +95,7 @@ Emulation of the Kaypro 4-84 computer
 ||                                                                                  ||
 ||                                                                                  ||
 \================================================ F1 for help ==== F4 to exit =====//
-```
+</pre>
 
 ### Usage with external images
 You can provide up two disk images as binary files to use as A: and B: drives. If only an image is provided, it will be the A: disk, B: will be a blank disk.
@@ -106,45 +106,46 @@ If using the Kaypro IV, 4-84, or 4-84 TurboROM/KayPLUS configurations, images ca
 
 Note: KayPLUS-formatted disks use sector IDs 0-9 on both sides (side selected via port 0x14 bit 2), unlike standard Kaypro DSDD disks which use sector IDs 10-19 on side 1. The `kayplus_84` model preset handles this automatically.
 
-```Emulation of the Kaypro II computer
+<pre style="background:#0a0a0a; color:#20BE55; font-family:'Terminus',monospace; padding:16px; border-radius:8px; overflow-x:auto; line-height:1.3;">
+Emulation of the Kaypro II computer
 
 //==================================================================================\
 ||                                                                                  ||
 || CP/Mish 2.2r0 for Kaypro II                                                      ||
 ||                                                                                  ||
-|| A>dir                                                                            ||
+|| A&gt;dir                                                                            ||
 || COPY    .COM  |  DUMP    .COM  |  ASM     .COM  |  STAT    .COM                  ||
 || BBCBASIC.COM  |  SUBMIT  .COM  |  QE      .COM                                   ||
-|| A>dir b:                                                                         ||
+|| A&gt;dir b:                                                                         ||
 || WS      .COM  |  WSOVLY1 .OVR  |  WSMSGS  .OVR  |  WS      .INS                  ||
 || WINSTALL.COM  |  PRINT   .TST                                                    ||
-|| A>stat                                                                           ||
+|| A&gt;stat                                                                           ||
 || A: R/W, space: 135/195kB                                                         ||
 || B: R/W, space: 27/195kB                                                          ||
 ||                                                                                  ||
-|| A>bbcbasic                                                                       ||
+|| A&gt;bbcbasic                                                                       ||
 || BBC BASIC (Z80) Version 3.00+1                                                   ||
 || (C) Copyright R.T.Russell 1987                                                   ||
-|| >PRINT "Hi!"                                                                     ||
+|| &gt;PRINT "Hi!"                                                                     ||
 || Hi!                                                                              ||
-|| >*BYE                                                                            ||
+|| &gt;*BYE                                                                            ||
 ||                                                                                  ||
-|| A>_                                                                              ||
+|| A&gt;_                                                                              ||
 ||                                                                                  ||
 ||                                                                                  ||
 ||                                                                                  ||
 \================================================= F1 for help ==== F4 to exit ====//
-```
+</pre>
 
 ### Online help
 Press F1 to get additional help:
 
-```
+<pre style="background:#0a0a0a; color:#20BE55; font-family:'Terminus',monospace; padding:16px; border-radius:8px; overflow-x:auto; line-height:1.3;">
 //==================================================================================\
 ||                                                                                  ||
 || KAYPRO II 64k CP/M vers 2.2                                                      ||
 ||                                                                                  ||
-|| A>_                                                                              ||
+|| A&gt;_                                                                              ||
 ||        +----------------------------------------------------------------+        ||
 ||        |  izkaypro: Kaypro II emulator for console terminals            |        ||
 ||        |----------------------------------------------------------------|        ||
@@ -168,7 +169,7 @@ Press F1 to get additional help:
 ||                                                                                  ||
 ||                                                                                  ||
 \================================================= F1 for help ==== F4 to exit ====//
-```
+</pre>
 
 ## Build from source
 
