@@ -16,7 +16,7 @@ pub struct FloppyController {
     pub drive: u8,
     side_2: bool,
     track: u8,           // Track register (software-accessible)
-    head_position: u8,   // Physical head position (moved by STEP commands)
+    pub head_position: u8,   // Physical head position (moved by STEP commands)
     step_direction: i8,  // Last step direction: 1 = in (towards higher tracks), -1 = out
     sector: u8,
     pub single_density: bool,
@@ -31,12 +31,17 @@ pub struct FloppyController {
     data_buffer: Vec<u8>,
 
     // WRITE TRACK state
-    write_track_active: bool,
+    pub write_track_active: bool,
     write_track_buffer: Vec<u8>,
     multi_sector: bool,
 
     // Index pulse simulation - counter for toggling index bit
     status_read_count: u32,
+
+    // Counts consecutive status reads without data access while BUSY.
+    // When the program stops reading/writing data and just polls status,
+    // the transfer has been abandoned and BUSY should clear.
+    status_polls_without_data: u8,
 
     // READ ADDRESS busy countdown: when >0, BUSY remains set.
     // Decremented on each status read; when it reaches 0, BUSY clears
@@ -47,6 +52,10 @@ pub struct FloppyController {
     pub raise_nmi: bool,
     pub trace: bool,
     pub trace_rw: bool,
+
+    // Debug: last FDC command for crash diagnosis
+    pub last_command: u8,
+    pub last_command_count: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -129,11 +138,14 @@ impl FloppyController {
             multi_sector: false,
 
             status_read_count: 0,
+            status_polls_without_data: 0,
             read_address_countdown: 0,
 
             raise_nmi: false,
             trace,
             trace_rw,
+            last_command: 0,
+            last_command_count: 0,
         }
     }
     
@@ -204,7 +216,15 @@ impl FloppyController {
         self.drive = drive;
     }
 
+    // Diagnostic accessors for crash tracing
+    pub fn get_status_raw(&self) -> u8 { self.status }
+    pub fn write_track_buf_len(&self) -> usize { self.write_track_buffer.len() }
+    pub fn data_buffer_len(&self) -> usize { self.data_buffer.len() }
+    pub fn side_2(&self) -> bool { self.side_2 }
+
     pub fn put_command(&mut self, command: u8) {
+        self.last_command = command;
+        self.last_command_count += 1;
         self.media_selected().flush_disk();
 
         if (command & 0xf0) == 0x00 {
@@ -466,7 +486,22 @@ impl FloppyController {
         if self.status & FDCStatus::Busy as u8 != 0 {
             // Type II/III status: bit 1 = DRQ (data ready for CPU to read/write)
             if self.read_index < self.read_last || !self.data_buffer.is_empty() || self.write_track_active {
-                status |= FDCStatus::DataRequest as u8;
+                self.status_polls_without_data += 1;
+                if self.status_polls_without_data < 10 {
+                    status |= FDCStatus::DataRequest as u8;
+                } else {
+                    self.read_index = 0;
+                    self.read_last = 0;
+                    self.data_buffer.clear();
+                    self.multi_sector = false;
+                    self.status = FDCStatus::NoError as u8;
+                    self.status_polls_without_data = 0;
+                    status = self.status;
+                }
+            } else {
+                self.status = FDCStatus::NoError as u8;
+                self.status_polls_without_data = 0;
+                status = self.status;
             }
         } else {
             // Type I status (or idle): bit 1 = Index pulse
@@ -501,6 +536,7 @@ impl FloppyController {
 
     pub fn put_data(&mut self, value: u8) {
         self.data = value;
+        self.status_polls_without_data = 0;
 
         if self.write_track_active {
             self.write_track_buffer.push(value);
@@ -546,19 +582,25 @@ impl FloppyController {
                         self.multi_sector = false;
                     }
                 } else {
-                    self.status = FDCStatus::NoError as u8;
+                    // Don't clear BUSY yet — same as get_data(): the program
+                    // may write more bytes than our 512-byte sector holds.
+                    // BUSY will be cleared when get_status() is polled.
                     self.read_index = 0;
                     self.read_last = 0;
                 }
             }
+        } else if self.status & FDCStatus::Busy as u8 != 0
+            && self.read_index == 0 && self.read_last == 0
+            && !self.write_track_active
+        {
+            // Sector data exhausted on write: accept and discard overflow
+            // bytes, keep raising NMI so the HALT/OUTI loop doesn't hang.
+            self.raise_nmi = true;
         }
-
-        //if self.trace {
-        //    println!("FDC: Set data ${:02x}", value);
-        //}
     }
 
     pub fn get_data(&mut self) -> u8 {
+        self.status_polls_without_data = 0;
         if !self.data_buffer.is_empty() {
             self.data = self.data_buffer[0];
             self.data_buffer.remove(0);
@@ -570,7 +612,7 @@ impl FloppyController {
             self.read_index += 1;
             self.raise_nmi = true;
             if self.read_index == self.read_last {
-                // We are done reading this sector
+                // We are done reading this sector's actual data.
                 if self.trace {
                     println!("FDC: Get data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
@@ -596,16 +638,29 @@ impl FloppyController {
                         self.multi_sector = false;
                     }
                 } else {
-                    self.status = FDCStatus::NoError as u8;
+                    // Don't clear BUSY yet — the program may expect more bytes
+                    // than our fixed 512-byte sector size (e.g. non-Kaypro formats
+                    // with 1024-byte sectors). Keep BUSY set so get_data() can
+                    // continue feeding dummy bytes. BUSY will be cleared when
+                    // get_status() detects no more data to transfer.
                     self.read_index = 0;
                     self.read_last = 0;
                 }
             }
+        } else if self.status & FDCStatus::Busy as u8 != 0
+            && self.read_index == 0 && self.read_last == 0
+            && self.data_buffer.is_empty()
+            && !self.write_track_active
+        {
+            // Sector data exhausted but BUSY still set: the program expects
+            // more bytes than our 512-byte sectors contain (e.g. non-Kaypro
+            // formats with 128/256/1024-byte sectors). Feed dummy bytes and
+            // keep raising NMI so the HALT/INI loop doesn't hang. BUSY will
+            // be cleared when the program polls status via get_status().
+            self.data = 0x00;
+            self.raise_nmi = true;
         }
 
-        //if self.trace {
-        //    println!("FDC: Get data ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
-        //}
         self.data
     }
 
