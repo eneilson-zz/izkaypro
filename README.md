@@ -2,27 +2,27 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use disk images.  For best display results, set your terminal window to 86 x 27.
+This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 27.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
-## What is/was a Kaypro II computer?
+## What is/was a Kaypro computer?
 
-The Kaypro II computer was a luggable computer from 1982 capable of running CP/M 2.2. It was considered "a rugged, functional and practical computer system marketed at a reasonable price." (From [Wikipedia](https://en.wikipedia.org/wiki/Kaypro))
+The Kaypro computer was a luggable computer first released in 1982 with further models released through the 1980s that was capable of running CP/M 2.2. It was considered "a rugged, functional and practical computer system marketed at a reasonable price." (From [Wikipedia](https://en.wikipedia.org/wiki/Kaypro))
 
 It's a typical CP/M computer of the early 80s, built on a metal case with standard components, a 9" green monochrome CRT, a detachable keyboard and two disk drives. Main features:
 
-- Zilog Z80 at 2.5 MHz
+- Zilog Z80 at 2.5 MHz or 4 MHz
 - 64 KB of main RAM
-- 2 KB of ROM
-- 2 KB of video RAM
+- 2 - 8 KB of ROM
+- 2 - 4 KB of video RAM
 - 80*24 text mode (no graphics capabilities)
 - Two single or double side double density drives with 200kb/400kb capacity
-- A serial port (not emulated by izkaypro)
-- A parallel port (not emulated by izkaypro)
+- One or more serial ports (not emulated by izkaypro)
+- One parallel port (not emulated by izkaypro)
 
 ## Supported Models
-This version of the emulator expands support to the Kaypro 4/83, 2X/4-84, and TurboROM-enabled Kaypro 4-84s.
+This version of the emulator expands support to the Kaypro 4/83, 2X/4-84, TurboROM and KayPLUS ROM-enabled 4-84s.
 
 | Model | ROM | Disk Format | Video Mode |
 |-------|-----|-------------|------------|
@@ -30,6 +30,7 @@ This version of the emulator expands support to the Kaypro 4/83, 2X/4-84, and Tu
 | Kaypro 4/83 | 81-232 | DSDD (400KB) | Memory-mapped |
 | Kaypro 2X/4/84 | 81-292a | DSDD (400KB) | SY6545 CRTC |
 | TurboROM 3.4 | trom34 | DSDD (400KB) | SY6545 CRTC |
+| KayPLUS 84 | kplus84 | DSDD (400KB) | SY6545 CRTC |
 
 ## Configuration
 
@@ -47,6 +48,9 @@ model = "kaypro4_84"
 
 # --- TurboROM 3.4 ---
 # model = "turbo_rom"
+
+# --- KayPLUS 84 ---
+# model = "kayplus_84"
 ```
 
 Optional: override default disk images by adding:
@@ -98,12 +102,10 @@ You can provide up two disk images as binary files to use as A: and B: drives. I
 
 If using the Kaypro II configuration, the images have to be raw binary images of single sided disks. The size must be 204800 bytes. See [disk images](doc/disk_images.md).
 
-If using the Kaypro IV, 4-84, or 4-84 TurboROM configurations, images can be wither SDDD or DSDD disk images.  Sample images of both sides are provided in the disks directory.  If you swap disks, make sure to enter Ctrl-C to warm boot and re-load the new disk so that the BIOS will properly detect SSDD or DSDD format.
+If using the Kaypro IV, 4-84, or 4-84 TurboROM/KayPLUS configurations, images can be either SSDD or DSDD disk images. Sample images of both sizes are provided in the disks directory. If you swap disks, some BIOS versions require you to warm boot (Ctrl-C) in order to re-load the new disk so that the BIOS will properly detect SSDD or DSDD format.
 
-```
-casa@servidor:~/$ ./izkaypro disks/cpmish.img disks/WordStar33.img 
-B: disks/WordStar33.img
-Kaypro https://github.com/ivanizag/izkaypro
+Note: KayPLUS-formatted disks use sector IDs 0-9 on both sides (side selected via port 0x14 bit 2), unlike standard Kaypro DSDD disks which use sector IDs 10-19 on side 1. The `kayplus_84` model preset handles this automatically.
+
 ```Emulation of the Kaypro II computer
 
 //==================================================================================\
@@ -180,7 +182,11 @@ USAGE:
 FLAGS:
     -b, --bdos-trace     Traces calls to the CP/M BDOS entrypoints
     -c, --cpu-trace      Traces CPU instructions execuions
+    -v, --crtc-trace     Traces SY6545 CRTC VRAM writes
+    -d, --diagnostics    Run ROM and RAM diagnostics then exit
+        --boot-test      Run headless boot tests for all models then exit
     -f, --fdc-trace      Traces access to the floppy disk controller
+    -w, --fdc-trace-rw   Traces RW access to the floppy disk controller
     -h, --help           Prints help information
     -i, --io-trace       Traces ports IN and OUT
     -r, --rom-trace      Traces calls to the ROM entrypoints
@@ -188,8 +194,8 @@ FLAGS:
     -V, --version        Prints version information
 
 ARGS:
-    <DISKA>    Disk A: image file. Empty or $ to load CP/M
-    <DISKB>    Disk B: image file. Default is a blank disk
+    <DISKA>    Disk A: image file. Empty or $ to use config default
+    <DISKB>    Disk B: image file. Empty to use config default
 ```
 
 ## Resources
