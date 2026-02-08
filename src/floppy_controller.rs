@@ -340,8 +340,12 @@ impl FloppyController {
             // READ SECTOR command, type II
             // 100mSEC0
             self.multi_sector = (command & 0x10) != 0;
+            let side_compare = (command & 0x02) != 0;
+            let side_flag = if (command & 0x08) != 0 { 1u8 } else { 0u8 };
             if self.trace || self.trace_rw {
-                println!("FDC: Read sector (Si:{}, Tr:{}, Se:{}, Head:{}, multi:{})", self.side_2, self.track, self.sector, self.head_position, self.multi_sector);
+                println!("FDC: Read sector (cmd:0x{:02x}, Si:{}, Tr:{}, Se:{}, Head:{}, multi:{}, C:{}, S:{})",
+                    command, self.side_2, self.track, self.sector, self.head_position,
+                    self.multi_sector, side_compare, side_flag);
             }
 
             let side_2 = self.side_2;
@@ -716,12 +720,12 @@ impl FloppyController {
             && self.data_buffer.is_empty()
             && !self.write_track_active
         {
-            // Sector data exhausted but BUSY still set: the program expects
-            // more bytes than our 512-byte sectors contain (e.g. non-Kaypro
-            // formats with 128/256/1024-byte sectors). Feed dummy bytes and
-            // keep raising NMI so the HALT/INI loop doesn't hang. BUSY will
-            // be cleared when the program polls status via get_status().
-            self.data = 0x00;
+            // Sector data exhausted but BUSY still set. Keep raising NMI
+            // so the HALT/INI loop doesn't hang (the program needs a
+            // completion NMI to exit the transfer). Retain the last data
+            // byte in self.data (don't overwrite with 0x00) so that any
+            // extra INI reads get the same value as the final real byte,
+            // avoiding verify corruption.
             self.raise_nmi = true;
         }
 

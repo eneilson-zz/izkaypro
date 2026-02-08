@@ -276,7 +276,10 @@ mod tests {
             409600,
             MediaFormat::DsDd,
             0,
-            &[(false, 2, 10, 0, 0)],
+            &[
+                (true, 0, 18, 1, 1),
+                (false, 1, 17, 1, 3),
+            ],
             40,
             2,
         );
@@ -337,5 +340,171 @@ mod tests {
             2,
         );
         assert_eq!(failures, 0, "Advent 1k DSDD: {} sectors failed", failures);
+    }
+
+    fn build_format_stream_unique(density_sd: bool, track: u8, head: u8, n: u8, sectors: &[u8]) -> Vec<u8> {
+        let sector_size = 128usize << (n as usize);
+        let mut stream = Vec::new();
+
+        if density_sd {
+            for _ in 0..16 { stream.push(0xFF); }
+            for &sec_id in sectors {
+                let fill = sec_id.wrapping_add(track).wrapping_add(head * 0x40);
+                for _ in 0..3 { stream.push(0x00); }
+                stream.push(0xFE);
+                stream.push(track);
+                stream.push(head);
+                stream.push(sec_id);
+                stream.push(n);
+                stream.push(0xF7);
+                for _ in 0..11 { stream.push(0xFF); }
+                for _ in 0..3 { stream.push(0x00); }
+                stream.push(0xFB);
+                for _ in 0..sector_size { stream.push(fill); }
+                stream.push(0xF7);
+                for _ in 0..10 { stream.push(0xFF); }
+            }
+            while stream.len() < 3125 { stream.push(0xFF); }
+        } else {
+            for _ in 0..80 { stream.push(0x4E); }
+            for &sec_id in sectors {
+                let fill = sec_id.wrapping_add(track).wrapping_add(head * 0x40);
+                for _ in 0..12 { stream.push(0x00); }
+                for _ in 0..3 { stream.push(0xF5); }
+                stream.push(0xFE);
+                stream.push(track);
+                stream.push(head);
+                stream.push(sec_id);
+                stream.push(n);
+                stream.push(0xF7);
+                for _ in 0..22 { stream.push(0x4E); }
+                for _ in 0..12 { stream.push(0x00); }
+                for _ in 0..3 { stream.push(0xF5); }
+                stream.push(0xFB);
+                for _ in 0..sector_size { stream.push(fill); }
+                stream.push(0xF7);
+                for _ in 0..24 { stream.push(0x4E); }
+            }
+            while stream.len() < 12000 { stream.push(0x4E); }
+        }
+        stream
+    }
+
+    #[test]
+    fn test_xerox820ii_dsdd_mixed_density() {
+        let image_size = 409600;
+        let format = MediaFormat::DsDd;
+        let num_tracks: u8 = 40;
+        let sides: u8 = 2;
+
+        let blank = vec![0x00u8; image_size];
+
+        let mut fdc = FloppyController::new(
+            "__nonexistent_test_a__",
+            "__nonexistent_test_b__",
+            format,
+            0,
+            true,
+            true,
+        );
+
+        fdc.media_b_mut().content = blank;
+        fdc.media_b_mut().format = format;
+        fdc.media_b_mut().learned_n = None;
+        fdc.media_b_mut().learned_sector_base = None;
+        fdc.media_b_mut().track_geometry.clear();
+        fdc.media_b_mut().write_protected = false;
+
+        fdc.set_drive(1);
+        fdc.set_motor(true);
+
+        // Format phase: Track 0 Side 0 = SD (N=0, 18 spt, base 1),
+        // all other track/sides = DD (N=1, 17 spt, base 1)
+        // This matches the real Xerox 820-II DSDD format.
+        for phys_track in 0..num_tracks {
+            for side in 0..sides {
+                let side_2 = side == 1;
+                fdc.set_side(side_2);
+
+                let (single_density, n, spt, sector_base) = if phys_track == 0 && !side_2 {
+                    (true, 0u8, 18u8, 1u8)
+                } else {
+                    (false, 1u8, 17u8, 1u8)
+                };
+
+                fdc.set_single_density(single_density);
+
+                let sectors: Vec<u8> = (sector_base..sector_base + spt).collect();
+                let stream = build_format_stream_unique(single_density, phys_track, side, n, &sectors);
+
+                fdc.put_track(phys_track);
+                fdc.head_position = phys_track;
+                fdc.put_command(0xF0);
+
+                for &byte in &stream {
+                    fdc.put_data(byte);
+                    if !fdc.write_track_active { break; }
+                }
+                if fdc.write_track_active {
+                    fdc.put_command(0xD0);
+                }
+            }
+        }
+
+        // Verify phase
+        let mut failed_sectors = 0;
+        for phys_track in 0..num_tracks {
+            for side in 0..sides {
+                let side_2 = side == 1;
+                fdc.set_side(side_2);
+
+                let (single_density, n, spt, sector_base) = if phys_track == 0 && !side_2 {
+                    (true, 0u8, 18u8, 1u8)
+                } else {
+                    (false, 1u8, 17u8, 1u8)
+                };
+                let sector_size = 128usize << (n as usize);
+
+                fdc.set_single_density(single_density);
+                fdc.head_position = phys_track;
+                fdc.put_track(phys_track);
+
+                for sec_idx in 0..spt {
+                    let sec_id = sector_base + sec_idx;
+                    let expected_fill = sec_id.wrapping_add(phys_track).wrapping_add(side * 0x40);
+
+                    fdc.put_sector(sec_id);
+                    fdc.put_command(0x80);
+
+                    let mut sector_data = Vec::new();
+                    for _ in 0..sector_size {
+                        sector_data.push(fdc.get_data());
+                    }
+
+                    for _ in 0..20 {
+                        if fdc.get_status() & 0x01 == 0 { break; }
+                    }
+
+                    let all_ok = sector_data.iter().all(|&b| b == expected_fill);
+                    if !all_ok {
+                        let bad_count = sector_data.iter().filter(|&&b| b != expected_fill).count();
+                        eprintln!("  FAIL: track {} side {} sector {}: expected fill 0x{:02x}, {}/{} bytes wrong, first bytes: {:02x} {:02x} {:02x} {:02x}",
+                            phys_track, side, sec_id, expected_fill, bad_count, sector_size,
+                            sector_data.get(0).copied().unwrap_or(0),
+                            sector_data.get(1).copied().unwrap_or(0),
+                            sector_data.get(2).copied().unwrap_or(0),
+                            sector_data.get(3).copied().unwrap_or(0));
+                        failed_sectors += 1;
+                    }
+                }
+            }
+        }
+
+        if failed_sectors == 0 {
+            eprintln!("  PASS: Xerox 820-II DSDD mixed-density - all sectors verified");
+        } else {
+            eprintln!("  FAIL: Xerox 820-II DSDD mixed-density - {} sectors failed", failed_sectors);
+        }
+        assert_eq!(failed_sectors, 0, "Xerox 820-II DSDD mixed-density: {} sectors failed", failed_sectors);
     }
 }
