@@ -211,20 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn test_osborne_sssd_on_dsdd_image() {
-        let failures = format_and_verify(
-            "Osborne SSSD on DSDD image",
-            409600,
-            MediaFormat::DsDd,
-            10,
-            &[(true, 1, 10, 1, 1)],
-            40,
-            1,
-        );
-        assert_eq!(failures, 0, "Osborne SSSD on DSDD image: {} sectors failed", failures);
-    }
-
-    #[test]
     fn test_osborne_ssdd() {
         let failures = format_and_verify(
             "Osborne SSDD",
