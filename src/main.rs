@@ -10,6 +10,8 @@ mod media;
 mod screen;
 mod sy6545;
 mod diagnostics;
+#[cfg(test)]
+mod format_test;
 
 use self::config::Config;
 use self::kaypro_machine::KayproMachine;

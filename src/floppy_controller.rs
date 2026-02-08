@@ -85,13 +85,13 @@ impl FloppyController {
         trace: bool,
         trace_rw: bool,
     ) -> FloppyController {
-        let (disk_a_content, disk_a_name, disk_a_file) = Self::load_disk_or_fallback(
+        let (disk_a_content, disk_a_name, disk_a_file, disk_a_wp) = Self::load_disk_or_fallback(
             disk_a_path,
             FALLBACK_DISK_DSDD,
             "Fallback Boot Disk (DSDD)",
         );
         
-        let (disk_b_content, disk_b_name, disk_b_file) = Self::load_disk_or_fallback(
+        let (disk_b_content, disk_b_name, disk_b_file, disk_b_wp) = Self::load_disk_or_fallback(
             disk_b_path,
             FALLBACK_BLANK_DSDD,
             "Fallback Blank Disk (DSDD)",
@@ -123,9 +123,11 @@ impl FloppyController {
                     name: disk_a_name,
                     content: disk_a_content,
                     format: format_a,
+                    write_protected: disk_a_wp,
                     side1_sector_base,
                     learned_n: None,
                     learned_sector_base: None,
+                    track_geometry: std::collections::HashMap::new(),
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -134,9 +136,11 @@ impl FloppyController {
                     name: disk_b_name,
                     content: disk_b_content,
                     format: format_b,
+                    write_protected: disk_b_wp,
                     side1_sector_base,
                     learned_n: None,
                     learned_sector_base: None,
+                    track_geometry: std::collections::HashMap::new(),
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -165,16 +169,16 @@ impl FloppyController {
     }
     
     /// Load a disk image from file, falling back to embedded data if not found.
-    /// Returns (content, name, file_handle). File handle is Some for writable files.
-    fn load_disk_or_fallback(path: &str, fallback: &'static [u8], fallback_name: &str) -> (Vec<u8>, String, Option<File>) {
+    /// Returns (content, name, file_handle, write_protected).
+    fn load_disk_or_fallback(path: &str, fallback: &'static [u8], fallback_name: &str) -> (Vec<u8>, String, Option<File>, bool) {
         match OpenOptions::new().read(true).write(true).open(path) {
             Ok(mut file) => {
                 let mut content = Vec::new();
                 match file.read_to_end(&mut content) {
-                    Ok(_) => (content, path.to_string(), Some(file)),
+                    Ok(_) => (content, path.to_string(), Some(file), false),
                     Err(e) => {
                         eprintln!("Warning: Could not read disk image '{}': {}, using fallback", path, e);
-                        (fallback.to_vec(), fallback_name.to_string(), None)
+                        (fallback.to_vec(), fallback_name.to_string(), None, false)
                     }
                 }
             }
@@ -182,11 +186,11 @@ impl FloppyController {
                 match fs::read(path) {
                     Ok(content) => {
                         eprintln!("Note: Disk image '{}' opened read-only (write-protected)", path);
-                        (content, path.to_string(), None)
+                        (content, path.to_string(), None, true)
                     }
                     Err(_) => {
                         eprintln!("Warning: Could not load disk image '{}', using fallback", path);
-                        (fallback.to_vec(), fallback_name.to_string(), None)
+                        (fallback.to_vec(), fallback_name.to_string(), None, false)
                     }
                 }
             }
@@ -656,7 +660,13 @@ impl FloppyController {
                     println!("FDC: Get data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
                 if self.trace || self.trace_rw {
-                    let sector_size = self.media[self.drive as usize].sector_size();
+                    let track = self.head_position;
+                    let side = self.side_2;
+                    let sector_size = if let Some(geom) = self.media[self.drive as usize].track_geometry.get(&(track, side)) {
+                        128usize << (geom.n as usize)
+                    } else {
+                        self.media[self.drive as usize].sector_size()
+                    };
                     let start = self.read_last.saturating_sub(sector_size);
                     let b0 = self.media[self.drive as usize].read_byte(start);
                     let b1 = self.media[self.drive as usize].read_byte(start + 1);
@@ -737,14 +747,73 @@ impl FloppyController {
 
         let buf = &self.write_track_buffer;
         let mut sectors_written = 0;
-        let mut learned_n: Option<u8> = None;
+        let mut track_learned_n: Option<u8> = None;
         let mut min_sector_id: u8 = 255;
+        let mut sector_count: u8 = 0;
 
         // Sync byte depends on density:
         //   MFM (double density): F5 F5 F5 = A1 sync with missing clock
         //   FM  (single density): 00 00 00 = zero-fill gap
         let sync = if self.single_density { 0x00u8 } else { 0xF5u8 };
 
+        // First pass: learn geometry from IDAMs before writing
+        // (so sector_index uses correct per-track values)
+        {
+            let mut i = 0;
+            while i + 3 < buf.len() {
+                if buf[i] == sync && buf[i+1] == sync && buf[i+2] == sync && buf[i+3] == 0xFE {
+                    i += 4;
+                    if i + 4 >= buf.len() { break; }
+                    let id_sector = buf[i+2];
+                    let id_n = buf[i+3];
+                    if id_sector < min_sector_id {
+                        min_sector_id = id_sector;
+                    }
+                    if track_learned_n.is_none() {
+                        track_learned_n = Some(id_n);
+                    }
+                    sector_count += 1;
+                    i += 4;
+                    // Skip past CRC marker, DAM, data, CRC marker
+                    let stream_size = 128usize << (id_n as usize);
+                    if i < buf.len() && buf[i] == 0xF7 { i += 1; }
+                    while i + 3 < buf.len() {
+                        if buf[i] == sync && buf[i+1] == sync && buf[i+2] == sync
+                            && (buf[i+3] == 0xFB || buf[i+3] == 0xF8) {
+                            i += 4;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    i += stream_size;
+                    if i < buf.len() && buf[i] == 0xF7 { i += 1; }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // Record per-track geometry
+        if let Some(n) = track_learned_n {
+            let geom = super::media::TrackGeometry {
+                n,
+                sector_count,
+                sector_base: min_sector_id,
+            };
+            self.media[self.drive as usize].track_geometry.insert((track, side_2), geom);
+
+            // Set global learned_n as fallback (use the first non-trivial N seen)
+            if self.media[self.drive as usize].learned_n.is_none() {
+                self.media[self.drive as usize].learned_n = Some(n);
+            }
+            if self.media[self.drive as usize].learned_sector_base.is_none() {
+                self.media[self.drive as usize].learned_sector_base = Some(min_sector_id);
+            } else if Some(min_sector_id) < self.media[self.drive as usize].learned_sector_base {
+                self.media[self.drive as usize].learned_sector_base = Some(min_sector_id);
+            }
+        }
+
+        // Second pass: write sector data to image
         let mut i = 0;
         while i + 3 < buf.len() {
             if buf[i] == sync && buf[i+1] == sync && buf[i+2] == sync && buf[i+3] == 0xFE {
@@ -756,18 +825,6 @@ impl FloppyController {
                 let id_sector = buf[i+2];
                 let id_n = buf[i+3];
                 let stream_size = 128usize << (id_n as usize);
-                if id_sector < min_sector_id {
-                    min_sector_id = id_sector;
-                    if self.media[self.drive as usize].learned_sector_base.is_none() {
-                        self.media[self.drive as usize].learned_sector_base = Some(id_sector);
-                    } else if Some(id_sector) < self.media[self.drive as usize].learned_sector_base {
-                        self.media[self.drive as usize].learned_sector_base = Some(id_sector);
-                    }
-                }
-                if learned_n.is_none() {
-                    learned_n = Some(id_n);
-                    self.media[self.drive as usize].learned_n = Some(id_n);
-                }
                 i += 4;
 
                 if i < buf.len() && buf[i] == 0xF7 { i += 1; }
@@ -782,8 +839,6 @@ impl FloppyController {
                     i += 1;
                 }
 
-                // Write stream_size bytes to the image. The IDAM N field defines
-                // the actual sector size for this format (e.g., 1024 for N=3 SSDD).
                 let write_len = stream_size;
                 if i + stream_size > buf.len() { break; }
 
@@ -815,15 +870,17 @@ impl FloppyController {
                 side_2, track, sectors_written, self.single_density, buf.len());
         }
 
-        // Learn sector geometry from IDAM fields
-        if learned_n.is_some() && min_sector_id != 255 {
-            let media = &mut self.media[self.drive as usize];
-            if media.learned_sector_base.is_none() {
-                media.learned_sector_base = Some(min_sector_id);
-            }
+        if track_learned_n.is_some() && min_sector_id != 255 {
+            let media = &self.media[self.drive as usize];
             if self.trace || self.trace_rw {
-                println!("FDC: Learned sector geometry: N={}, sector_size={}, sectors_per_side={}, sector_base={}",
-                    learned_n.unwrap(), media.sector_size(),
+                println!("FDC: Track {}/{} geometry: N={}, sectors={}, sector_base={}",
+                    track, if side_2 { "S1" } else { "S0" },
+                    track_learned_n.unwrap(), sector_count, min_sector_id);
+            }
+            // Also log global fallback
+            if self.trace || self.trace_rw {
+                println!("FDC: Global fallback geometry: N={}, sector_size={}, sectors_per_side={}, sector_base={}",
+                    media.learned_n.unwrap_or(255), media.sector_size(),
                     media.sectors_per_side(), media.sector_id_base());
             }
         }

@@ -1,0 +1,3 @@
+FDC: finish_write_track LEARN: Tr:0 Si:false fm=true id_sector=1 id_n=0 prev_N=2 prev_base=0
+FDC: FM Write track Si:false Tr:0 sectors_written=10 learned=true N=2 base=1 buf_len=3125
+FDC: SD READ SECTOR failed: Si:false Tr:0 Se:11 base=1 N=2 xfer=512

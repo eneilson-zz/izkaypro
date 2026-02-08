@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>izkaypro Changes Summary</title>
+<style>
+body { font-family: Calibri, Arial, sans-serif; max-width: 800px; margin: 40px auto; line-height: 1.6; }
+h1 { color: #333; border-bottom: 2px solid #333; }
+h2 { color: #444; margin-top: 30px; }
+h3 { color: #555; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+th { background-color: #f0f0f0; }
+code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: Consolas, monospace; }
+ul { margin: 10px 0; }
+li { margin: 5px 0; }
+</style>
+</head>
+<body>
+
+<h1>Major Changes Since Original Checkout (v0.1.1)</h1>
+
+<h2>New Features</h2>
+
+<h3>TOML Configuration System (v0.3.0)</h3>
+<ul>
+<li>New <code>izkaypro.toml</code> config file for runtime model selection</li>
+<li>No recompilation needed to switch between Kaypro models</li>
+<li>Supported presets: <code>kaypro_ii</code>, <code>kaypro4_83</code>, <code>kaypro4_84</code>, <code>turbo_rom</code>, <code>custom</code></li>
+<li>ROM and disk images loaded from external files with embedded fallbacks</li>
+<li>Command-line disk arguments override config file settings</li>
+</ul>
+
+<h3>Machine Name Display (v0.3.1)</h3>
+<ul>
+<li>Top border line now shows centered machine name (e.g., <code>//===Kaypro 4-84===\\</code>)</li>
+</ul>
+
+<h3>Kaypro 4-84 Support with SY6545 CRTC (v0.2.0)</h3>
+<ul>
+<li>New SY6545 CRTC emulation (<code>src/sy6545.rs</code>) for Kaypro 2X/4/84</li>
+<li>Port-based VRAM access via transparent addressing protocol</li>
+<li>Attribute RAM support (reverse, dim, blink, underline)</li>
+<li>Hardware scrolling via R12:R13 start address</li>
+</ul>
+
+<h3>TurboROM 3.4 Support (v0.2.1)</h3>
+<ul>
+<li>ROM shadowing to RAM for ROMs that switch bank modes</li>
+<li>Index pulse simulation (FDC status bit 1)</li>
+<li>Fixed NMI timing for HALT instruction handling</li>
+</ul>
+
+<h2>Bug Fixes</h2>
+
+<h3>ROM Banking Fix (v0.3.0)</h3>
+<ul>
+<li>Fixed critical bug where .COM programs crashed after loading</li>
+<li>ROM reads now correctly return ROM data (not overwritten RAM) when in ROM bank mode</li>
+</ul>
+
+<h3>CRTC Cursor Artifact Fix (v0.2.1)</h3>
+<ul>
+<li>VRAM writes via port 0x1F only accepted when R31 (strobe) is selected</li>
+<li>Prevents stray writes after cursor register updates</li>
+</ul>
+
+<h3>Memory Mapping Fix</h3>
+<ul>
+<li>0x3000-0x3FFF treated as regular RAM in CRTC mode (not memory-mapped VRAM)</li>
+<li>Fixes display issues in programs like Zork that use this memory region</li>
+</ul>
+
+<h2>FDC (WD1793) Enhancements</h2>
+<ul>
+<li>Added STEP, STEP IN, STEP OUT commands with direction tracking</li>
+<li>READ ADDRESS returns physical head position (not software track register)</li>
+<li>Index pulse simulation for TurboROM format detection</li>
+</ul>
+
+<h2>New Files</h2>
+
+<table>
+<tr><th>File</th><th>Purpose</th></tr>
+<tr><td><code>src/config.rs</code></td><td>TOML configuration parsing and model presets</td></tr>
+<tr><td><code>src/sy6545.rs</code></td><td>SY6545 CRTC emulation</td></tr>
+<tr><td><code>src/diagnostics.rs</code></td><td>ROM/RAM/VRAM diagnostic tests</td></tr>
+<tr><td><code>izkaypro.toml</code></td><td>Default configuration file</td></tr>
+<tr><td><code>AGENTS.md</code></td><td>Technical documentation for AI assistants</td></tr>
+</table>
+
+</body>
+</html>

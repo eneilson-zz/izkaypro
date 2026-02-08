@@ -6,7 +6,6 @@
 #   kaypro4_83  - Kaypro 4/83 (DSDD, 81-232 ROM, memory-mapped video)
 #   kaypro4_84  - Kaypro 2X/4/84 (DSDD, 81-292a ROM, SY6545 CRTC)
 #   turbo_rom   - Kaypro 4/84 with TurboROM 3.4 (DSDD, SY6545 CRTC)
-#   kayplus_84  - Kaypro 4/84 with KayPLUS BIOS (DSDD, SY6545 CRTC)
 #   custom      - Use custom settings below
 
 # Custom settings (only used when model = "custom")
@@ -35,13 +34,11 @@
 # --- TurboROM 3.4 ---
 # model = "turbo_rom"
 
-# --- KayPLUS 84 ---
- model = "kayplus_84"
-
 # --- Custom configuration ---
-# model = "custom"
-# rom_file = "roms/my_custom.rom"
-# video_mode = "sy6545"
-# disk_format = "dsdd"
-# disk_a = "disks/my_boot_disk.img"
-# disk_b = "disks/my_data_disk.img"
+ model = "custom"
+ rom_file = "roms/kplus84.rom"
+ video_mode = "sy6545"
+ disk_format = "dsdd"
+ side1_sector_base = 0
+ disk_a = "disks/kayplus1.img"
+ disk_b = "disks/cpm22-kaypro4-blank.img"

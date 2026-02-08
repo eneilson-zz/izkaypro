@@ -1,0 +1,616 @@
+;=====================================================================
+; KMOVCPM - Kaypro CP/M 2.2G Memory Relocator
+;=====================================================================
+;
+; Based on Digital Research MOVCPM, customized for Kaypro systems.
+; Modified to fix the synchronization check bug that prevented
+; relocating CP/M to any TPA size other than 63K, and to update
+; the boot sign-on message with the correct memory size.
+;
+; Original: COPYRIGHT (C) DIGITAL RESEARCH, 1980
+; Kaypro modifications for CP/M 2.2G
+; Bug fixes by eneilson-zz, 2025
+;
+; Usage:
+;   KMOVCPM           - Auto-detect memory and build CP/M image
+;   KMOVCPM 62        - Build CP/M for 62K TPA
+;   KMOVCPM 62 *      - Build and install in-place for warm boot
+;
+; Assemble with zmac:
+;   zmac --zmac -z kmovcpm.z
+;   cp zout/kmovcpm.cim kmovcpm.com
+;
+; The embedded CP/M 2.2G system image and relocation bitmap are
+; stored in the companion file kmovcpm_image.bin, which must be
+; present in the same directory during assembly.
+;=====================================================================
+
+        org     0100h
+
+;---------------------------------------------------------------------
+; BDOS entry points
+;---------------------------------------------------------------------
+BDOS    equ     0005h           ; BDOS entry
+WBOOT   equ     0000h           ; Warm boot
+FCB1    equ     005Dh           ; Default FCB (first command arg)
+FCB2    equ     006Dh           ; Second command arg
+
+;---------------------------------------------------------------------
+; CP/M image layout constants
+;---------------------------------------------------------------------
+IMG_HDR equ     0800h           ; Image header (boot sector + BIOS stubs)
+IMG_SZ  equ     0801h           ; Image size (2 bytes, little-endian)
+IMG_BASE equ    0900h           ; Start of embedded CP/M system image
+SIGNON  equ     20DEh           ; "63" digits in BIOS sign-on string
+
+;---------------------------------------------------------------------
+; Internal variable locations
+;---------------------------------------------------------------------
+BDOS_SAVE equ   037Ah           ; Saved BDOS entry address (2 bytes)
+DELTA   equ     037Ch           ; Relocation delta (2 bytes)
+
+;=====================================================================
+; Entry Point
+;=====================================================================
+entry:
+        jp      main
+
+;---------------------------------------------------------------------
+; Copyright notice (embedded in binary, not displayed)
+;---------------------------------------------------------------------
+copyright:
+        defb    'COPYRIGHT (C) DIGITAL RESEARCH, 1980     '
+
+;=====================================================================
+; Main Program
+;=====================================================================
+main:
+        ld      sp, IMG_HDR     ; Stack below image area
+
+        ; Parse command-line argument from FCB1
+        ld      de, FCB1
+        ld      a, (de)
+        cp      ' '             ; No argument?
+        jp      z, auto_detect
+        cp      '?'             ; Help/wildcard?
+        jp      z, auto_detect
+
+        ; Parse decimal number from command line
+        ld      hl, 0000h
+parse_loop:
+        ld      a, (de)
+        inc     de
+        cp      ' '             ; Space = end of number
+        jp      z, parse_done
+        or      a               ; Null = end of number
+        jp      z, parse_done
+        sub     '0'             ; Convert ASCII to digit
+        cp      10
+        jp      nc, err_invalid ; Not a digit -> error
+
+        ; HL = HL * 10 + digit
+        add     hl, hl          ; HL * 2
+        push    hl
+        add     hl, hl          ; HL * 4
+        add     hl, hl          ; HL * 8
+        pop     bc
+        add     hl, bc          ; HL * 10
+        ld      c, a
+        ld      b, 0
+        add     hl, bc          ; HL * 10 + digit
+        jp      parse_loop
+
+        ; Validate the parsed memory size
+parse_done:
+        ld      a, h
+        or      a
+        jp      nz, err_invalid ; Must fit in 8 bits (max 255K)
+        ld      a, l
+        cp      16
+        jp      c, err_invalid  ; Must be >= 16K
+
+        ; Convert K to top-of-memory address: HL = K * 1024
+        ld      l, 0            ; HL = K << 8
+        ld      h, a
+        add     hl, hl          ; HL = K << 9
+        add     hl, hl          ; HL = K * 1024
+        jp      begin_reloc
+
+;---------------------------------------------------------------------
+; Error: Invalid memory size
+;---------------------------------------------------------------------
+err_invalid:
+        ld      de, msg_invalid
+        call    print_string
+        jp      WBOOT
+
+msg_invalid:
+        defb    13, 10, 'INVALID MEMORY SIZE'
+        defb    '$'             ; String terminator (falls through to auto_detect)
+
+;=====================================================================
+; Auto-detect memory size by probing RAM
+;=====================================================================
+auto_detect:
+        ld      hl, 0000h
+probe_loop:
+        defb    24h             ; Dual purpose: terminates string above IF
+                                ; reached via print, AND acts as INC H to
+                                ; start probe at page 0100h
+
+        ; Memory probe loop: flip a byte, check if it sticks
+        jp      z, probe_done   ; H wrapped to 0 -> 64K found
+        ld      a, (hl)
+        cpl                     ; Flip all bits
+        ld      (hl), a
+        cp      (hl)            ; Did the write stick?
+        cpl                     ; Restore original value
+        ld      (hl), a
+        jp      z, probe_loop   ; Match -> RAM exists, continue
+
+        ; H = first non-RAM page, round down to 1K boundary
+probe_done:
+        ld      a, h
+        and     0FCh            ; Mask to 1K boundary
+        ld      h, a
+
+;=====================================================================
+; Begin CP/M relocation
+; HL = top-of-memory address (e.g., F800h for 62K, FC00h for 63K)
+;=====================================================================
+begin_reloc:
+        push    hl              ; Save top-of-memory
+
+        ; Save the running system's BDOS entry address
+        ld      hl, (BDOS+1)   ; Load BDOS entry from address 0x0006
+        ld      (BDOS_SAVE), hl
+
+        pop     hl
+        push    hl              ; HL = top-of-memory again
+
+        ; Convert top-of-memory to K for display
+        ; H = top page, K = H >> 2 (divide by 4 pages per K)
+        ld      a, h
+        rrca
+        rrca
+        and     3Fh
+        jp      nz, got_ksize
+        ld      a, 40h          ; 0 means 64K (256 pages / 4)
+got_ksize:
+        ld      b, a            ; B = memory size in K
+
+        ; Convert memory size to ASCII digits at msg_constructing
+        ld      hl, mem_tens
+        ld      a, '0'
+        ld      (hl), a         ; Initialize tens digit to '0'
+        inc     hl
+        ld      (hl), a         ; Initialize ones digit to '0'
+ascii_loop:
+        ld      hl, mem_ones
+        inc     (hl)            ; Increment ones digit
+        ld      a, (hl)
+        cp      '9'+1           ; Overflow?
+        jp      c, ascii_next
+        ld      (hl), '0'       ; Reset ones to '0'
+        dec     hl
+        inc     (hl)            ; Carry into tens
+ascii_next:
+        dec     b
+        jp      nz, ascii_loop
+
+        ; Patch the BIOS sign-on string with the correct size,
+        ; then print the "CONSTRUCTING" message
+        jp      patch_signon
+
+after_patch:
+        call    print_string    ; Print "CONSTRUCTING XXk CP/M vers 2.2"
+
+;---------------------------------------------------------------------
+; Load the relocation table parameters from the image header
+;---------------------------------------------------------------------
+        ld      hl, IMG_SZ
+        ld      c, (hl)         ; BC = image size (little-endian)
+        inc     hl
+        ld      b, (hl)
+        push    bc              ; Save image size
+
+;---------------------------------------------------------------------
+; Search for relocation bitmap in the image
+; The bitmap follows the system image, preceded by a 15-byte marker
+;---------------------------------------------------------------------
+        ld      hl, IMG_BASE
+find_bitmap:
+        ld      de, sync_marker ; DE -> expected marker bytes
+        ld      a, b
+        or      c
+        jp      z, delta_calc   ; End of image -> marker not found, skip
+
+        dec     bc
+        push    bc
+        ld      c, 15           ; Compare 15 bytes
+        push    hl
+compare_loop:
+        ld      a, (de)
+        cp      (hl)
+        jp      nz, compare_fail
+        inc     de
+        inc     hl
+        dec     c
+        jp      z, compare_match
+        jp      compare_loop
+
+;---------------------------------------------------------------------
+; Dead/patched-over code from original MOVCPM
+; (Unreachable - preserved for binary compatibility)
+;---------------------------------------------------------------------
+dead_code:
+        ld      bc, 3DAFh
+        jp      nz, dead_code+2
+        ld      hl, 76F3h
+        ld      (BDOS_SAVE), hl
+        ld      hl, print_string+2
+        ld      (hl), 0CDh     ; Patch to CALL
+        ld      de, msg_sync_err-5
+        ld      hl, BDOS+0
+        add     hl, de
+        ex      de, hl
+        jp      print_string
+
+;---------------------------------------------------------------------
+; Bitmap marker comparison: no match
+;---------------------------------------------------------------------
+compare_fail:
+        pop     hl
+        inc     hl              ; Try next position
+        pop     bc
+        jp      find_bitmap
+
+;---------------------------------------------------------------------
+; Bitmap marker comparison: match found
+; Patch the sync marker bytes into the relocation table
+;---------------------------------------------------------------------
+compare_match:
+        pop     hl              ; HL = match position
+        pop     bc              ; BC = remaining count
+        dec     hl
+        ld      de, mem_ones
+        ld      a, (de)
+        ld      (hl), a         ; Patch last 2 bytes of marker in image
+        dec     hl
+        dec     de
+        ld      a, (de)
+        ld      (hl), a
+
+;=====================================================================
+; Compute relocation delta
+; Stack: image_size (BC popped), top-of-memory (HL popped)
+;=====================================================================
+delta_calc:
+        ld      bc, BDOS_SAVE
+        ld      a, (bc)         ; A = low byte of saved BDOS entry
+        cp      06h             ; Standard CP/M BDOS low byte?
+        ld      a, 0
+        jp      nz, sync_error  ; Not standard -> error
+
+        ld      (bc), a         ; Zero the low byte (for sync check later)
+        pop     bc              ; BC = image size
+        pop     hl              ; HL = top-of-memory address
+        push    bc              ; Save image size again
+
+        ; Compute base address where system should be placed:
+        ; HL = top_of_memory - (image_size + 0x400)
+        ; The 0x400 accounts for the boot sector / header (256*4 bytes)
+        ld      a, b
+        add     a, 04h          ; B = B + 4 (add 4 pages = 1K for header)
+        ld      b, a
+        ld      a, l
+        sub     c               ; L = L - C
+        ld      l, a
+        ld      a, h
+        sbc     a, b            ; H = H - B - carry
+        ld      h, a
+        ld      (DELTA), hl     ; Save relocation delta
+
+        ; Check if second argument '*' was specified (install in-place)
+        ex      de, hl
+        ld      hl, IMG_BASE
+        pop     bc              ; BC = image size
+        push    bc
+        ld      a, (FCB2)
+        cp      ' '
+        jp      z, copy_image   ; No '*' -> copy image to buffer
+
+        ; '*' specified: skip copy, point to image in place
+        add     hl, bc          ; HL = end of image
+        jp      setup_reloc
+
+;---------------------------------------------------------------------
+; Synchronization error handler
+;---------------------------------------------------------------------
+sync_error:
+        ld      hl, dead_code+1 ; 01FFh - was used for error loop
+        ld      (fixup_jmp+2), hl
+        jp      fixup_jmp+1
+
+;---------------------------------------------------------------------
+; Copy the embedded image to the destination buffer
+;---------------------------------------------------------------------
+copy_image:
+        ld      a, b
+        or      c
+        jp      z, setup_reloc  ; Done copying
+        dec     bc
+        ld      a, (hl)
+        ld      (de), a         ; Copy byte
+        inc     de
+        inc     hl
+        jp      copy_image
+
+;=====================================================================
+; Set up and apply relocation bitmap
+; The bitmap is a packed bitstream: 1 = relocate high byte, 0 = skip
+;=====================================================================
+setup_reloc:
+        pop     bc              ; BC = image size
+        push    hl              ; Save bitmap pointer
+
+        ; Compute the page adjustment value
+        ; H = high byte of (0x100 + delta)
+        ld      hl, (DELTA)
+        ex      de, hl          ; DE = delta
+        ld      hl, 0100h
+        add     hl, de          ; HL = 0x100 + delta (relocation base)
+
+        ; Check for '*' mode
+        ld      a, (FCB2)
+        cp      ' '
+        jp      z, reloc_loop   ; No '*' -> apply relocation to buffer
+
+        ; '*' mode: apply relocation to image in place at 0x0900
+        ld      de, IMG_BASE
+
+;---------------------------------------------------------------------
+; Relocation bitmap processing loop
+; H = page delta to add to each flagged high byte
+; DE = pointer into system image being relocated
+; BC = bytes remaining
+; Stack top = pointer to bitmap data
+;---------------------------------------------------------------------
+reloc_loop:
+        ld      a, b
+        or      c
+        jp      z, verify       ; Done -> verify
+
+        jp      reloc_step
+
+;---------------------------------------------------------------------
+; "SYNCHRONIZATION ERROR" message (data)
+;---------------------------------------------------------------------
+msg_sync_err:
+        defb    13, 10, 'SYNCRONIZATION ERROR$'
+
+;---------------------------------------------------------------------
+; Process one byte in the relocation bitmap
+;---------------------------------------------------------------------
+reloc_step:
+        dec     bc
+        ld      a, e
+        and     07h             ; Every 8 bytes, fetch next bitmap byte
+        jp      nz, check_bit
+        ex      (sp), hl        ; Swap HL with bitmap pointer
+        ld      a, (hl)         ; Fetch next bitmap byte
+        inc     hl
+        ex      (sp), hl        ; Restore HL, save updated bitmap ptr
+        ld      l, a            ; L = current bitmap byte
+
+check_bit:
+        ld      a, l
+        rla                     ; Shift out the top bit into carry
+        ld      l, a
+        jp      nc, skip_byte   ; Bit=0: don't relocate this byte
+
+        ; Bit=1: add page delta (H) to the byte at (DE)
+        ld      a, (de)
+        add     a, h            ; Adjust high byte
+        ld      (de), a
+
+        jp      skip_byte       ; (fall through would also work)
+
+skip_byte:
+        inc     de              ; Advance to next byte in image
+        jp      reloc_loop
+
+;=====================================================================
+; Verify relocation (synchronization check)
+; Compare 6 bytes of relocated image against running BDOS
+;
+; BUGFIX: The original code jumped to sync_error on mismatch.
+; This fails for any TPA size != 63K because the relocated addresses
+; in the image won't match the running 63K system's BDOS.
+; The conditional jump has been replaced with NOPs.
+;=====================================================================
+verify:
+        pop     de              ; Discard bitmap pointer
+        ld      de, 1200h       ; Fixed address in relocated image
+        ld      hl, (BDOS_SAVE) ; Running system's BDOS address
+        ld      c, 6            ; Compare 6 bytes
+verify_loop:
+        ld      a, (de)
+        cp      (hl)
+        nop                     ; BUGFIX: was JP NZ,sync_error
+        nop                     ; These 3 NOPs replace the conditional
+        nop                     ; jump that broke non-63K relocation
+        inc     hl
+        inc     de
+        dec     c
+        jp      nz, verify_loop
+
+;=====================================================================
+; Post-relocation: format output messages
+;=====================================================================
+        ; Check if '*' mode (install for warm boot)
+        ld      a, (FCB2)
+        cp      ' '
+        jp      z, install_mode ; '*' specified -> install in memory
+
+        ; Standard mode: find end of zeroed area in image
+        ld      b, 128
+        ld      hl, IMG_BASE
+find_nonzero:
+        ld      a, (hl)
+        or      a
+        jp      nz, format_save ; Found non-zero byte
+        inc     hl
+        dec     b
+        jp      nz, find_nonzero
+
+        ; Shift image down past zeroed prefix
+        ex      de, hl          ; DE = first non-zero byte
+        ld      hl, (IMG_SZ)    ; BC = image size - 128
+        ld      bc, 0FF80h
+        add     hl, bc
+        ld      b, h
+        ld      c, l
+        ld      hl, IMG_BASE    ; Copy from DE to HL (shift down)
+shift_loop:
+        ld      a, b
+        or      c
+        jp      z, format_save
+        dec     bc
+        ld      a, (de)
+        ld      (hl), a
+        inc     de
+        inc     hl
+        jp      shift_loop
+
+fixup_jmp:
+        defb    01h             ; LD BC opcode: "eats" next 2 bytes
+        jp      fixup_jmp+1     ; Self-modified: operand patched by sync_error
+
+;---------------------------------------------------------------------
+; Format the SAVE command output message
+;---------------------------------------------------------------------
+format_save:
+        ld      hl, IMG_SZ
+        ld      c, (hl)         ; BC = image size
+        inc     hl
+        ld      b, (hl)
+        ld      hl, IMG_BASE
+        add     hl, bc          ; HL = end of image in pages
+        ld      b, h            ; B = number of pages (for SAVE command)
+
+        ; Convert page count to ASCII in the SAVE message
+        ld      hl, save_pages
+        ld      a, '0'
+        ld      (hl), a         ; Tens digit
+        inc     hl
+        ld      (hl), a         ; Ones digit
+save_ascii:
+        dec     b
+        jp      z, display_result
+        ld      hl, save_ones
+        inc     (hl)
+        ld      a, (hl)
+        cp      '9'+1
+        jp      c, save_ascii
+        ld      (hl), '0'
+        dec     hl
+        inc     (hl)
+        jp      save_ascii
+
+;---------------------------------------------------------------------
+; Display the result message
+;---------------------------------------------------------------------
+display_result:
+        ; Copy memory size digits into the SAVE filename (CPMxx.COM)
+        ld      hl, (mem_tens)  ; Load both digit bytes
+        ld      (save_cpm_digits), hl
+
+        ld      de, msg_ready
+        call    print_string
+        jp      WBOOT
+
+;---------------------------------------------------------------------
+; Output messages (data)
+;---------------------------------------------------------------------
+msg_ready:
+        defb    13, 10, 'READY FOR "SYSGEN" OR'
+        defb    13, 10, '"SAVE '
+save_pages:
+        defb    '0'
+save_ones:
+        defb    '0 CPM'
+save_cpm_digits:
+        defb    '00'
+        defb    '.COM"$'
+
+;---------------------------------------------------------------------
+; '*' install mode: jump into relocated CP/M
+;---------------------------------------------------------------------
+install_mode:
+        ld      de, 1700h       ; Offset to warm boot entry
+        ld      hl, (DELTA)
+        add     hl, de
+        jp      (hl)            ; Jump to warm boot in relocated image
+
+;---------------------------------------------------------------------
+; Print string: call BDOS function 9 (print string at DE)
+;---------------------------------------------------------------------
+print_string:
+        ld      c, 09h
+        jp      BDOS
+
+;---------------------------------------------------------------------
+; Saved values (variables, initialized to zero)
+;---------------------------------------------------------------------
+        defs    2               ; BDOS_SAVE (037Ah-037Bh)
+        defs    2               ; DELTA     (037Ch-037Dh)
+
+;---------------------------------------------------------------------
+; "CONSTRUCTING" message with embedded ASCII memory size
+;---------------------------------------------------------------------
+msg_constructing:
+        defb    13, 10, 'CONSTRUCTING '
+mem_tens:
+        defb    '0'
+mem_ones:
+        defb    '0'
+sync_marker:
+        defb    'k CP/M vers 2.2$'
+        defb    0
+
+;=====================================================================
+; Patch routine: update the BIOS sign-on string in the embedded
+; CP/M image to display the correct memory size at boot.
+;
+; The sign-on string "KAYPRO 63K CP/M Version 2.2G" is embedded
+; in the BIOS at address 20DEh (the "63" digits).
+; This copies the already-computed ASCII digits there.
+;=====================================================================
+patch_signon:
+        ld      a, (mem_tens)   ; Load tens digit
+        ld      (SIGNON), a    ; Patch sign-on string tens
+        ld      a, (mem_ones)   ; Load ones digit
+        ld      (SIGNON+1), a  ; Patch sign-on string ones
+        ld      de, msg_constructing  ; Original instruction we replaced
+        jp      after_patch     ; Return to main flow
+
+;---------------------------------------------------------------------
+; Padding to align embedded image at 0x0800
+;---------------------------------------------------------------------
+        defs    IMG_HDR - $, 0
+
+;=====================================================================
+; Embedded CP/M 2.2G system image with relocation bitmap
+;
+; Layout:
+;   0x0800-0x08FF: Boot sector / BIOS entry stubs
+;   0x0900-0x23FF: CP/M system image (CCP + BDOS + BIOS)
+;   0x2400-0x2AFF: Relocation bitmap
+;
+; The image is pre-built for 63K (top of memory = FC00h).
+; The relocation code above adjusts it for other memory sizes.
+;=====================================================================
+        incbin  "kmovcpm_image.bin"
+
+        end

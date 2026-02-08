@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write, Seek, SeekFrom, Result, Error, ErrorKind};
 
@@ -56,11 +57,23 @@ pub fn detect_media_format(len: usize) -> MediaFormat {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct TrackGeometry {
+    pub n: u8,
+    pub sector_count: u8,
+    pub sector_base: u8,
+}
+
 pub struct Media {
     pub file: Option<File>,
     pub name: String,
     pub content: Vec<u8>,
     pub format: MediaFormat,
+    /// Whether the disk is write-protected. Separate from file handle presence:
+    /// file: None + write_protected: false = in-memory writable (test/fallback media)
+    /// file: None + write_protected: true = read-only disk image
+    /// file: Some + write_protected: false = persistent writable disk
+    pub write_protected: bool,
     /// Sector ID base for side 1 headers, reflecting how the disk was physically formatted.
     /// Standard Kaypro disks: 10 (sector IDs 10-19 on side 1)
     /// KayPLUS-formatted disks: 0 (sector IDs 0-9 on both sides)
@@ -72,6 +85,9 @@ pub struct Media {
     /// Sector ID base learned from WRITE TRACK (minimum sector ID seen).
     /// When Some(b), overrides the default sector_id_base().
     pub learned_sector_base: Option<u8>,
+    /// Per-track geometry learned from WRITE TRACK. Indexed by (track, side).
+    /// On a real WD1793, each track has its own IDAM headers defining N/sector layout.
+    pub track_geometry: HashMap<(u8, bool), TrackGeometry>,
 
     pub write_min: usize,
     pub write_max: usize,
@@ -137,6 +153,9 @@ impl Media {
         }
     }
 
+    pub fn track_stride_per_side(&self) -> usize {
+        self.sectors_per_side() as usize * self.sector_size()
+    }
 
     pub fn load_disk(&mut self, filename: &str) -> Result<()>{
         self.flush_disk();
@@ -178,12 +197,14 @@ impl Media {
             return Err(Error::new(ErrorKind::Other, format!("Unrecognized disk image format (len {})", content.len())));
         }
 
+        self.write_protected = readonly;
         self.file = file;
         self.name = filename.to_owned();
         self.content = content;
         self.format = format;
         self.learned_n = None;
         self.learned_sector_base = None;
+        self.track_geometry.clear();
 
         Ok(())
     }
@@ -215,15 +236,14 @@ impl Media {
         if tracks == 0 {
             return;
         }
-        let sector_size = self.sector_size();
-        let spt = self.sectors_per_side() as usize;
-        let bytes_per_side_track = spt * sector_size;
-        let new_len = tracks * 2 * bytes_per_side_track;
+        let stride = self.track_stride_per_side();
+        if stride == 0 { return; }
+        let new_len = tracks * 2 * stride;
         let mut new_content = vec![0xE5u8; new_len];
         for t in 0..tracks {
-            let src_offset = t * bytes_per_side_track;
-            let dst_offset = t * 2 * bytes_per_side_track;
-            let copy_len = bytes_per_side_track.min(self.content.len().saturating_sub(src_offset));
+            let src_offset = t * stride;
+            let dst_offset = t * 2 * stride;
+            let copy_len = stride.min(self.content.len().saturating_sub(src_offset));
             if copy_len > 0 {
                 new_content[dst_offset..dst_offset + copy_len]
                     .copy_from_slice(&self.content[src_offset..src_offset + copy_len]);
@@ -262,13 +282,36 @@ impl Media {
             return (false, 0, 0);
         }
 
-        // Map the FDC sector ID to a 0-based image slot index.
-        // SSSD uses 1-based sector IDs (1-10), subtract the base to get 0-based.
-        // DSDD uses 0-based on side 0 (0-9) and either 10-19 or 0-9 on side 1.
+        // Look up per-track geometry (from WRITE TRACK), fall back to globals
+        if let Some(geom) = self.track_geometry.get(&(track, side_2)) {
+            let n = geom.n;
+            let spt = geom.sector_count;
+            let base = geom.sector_base;
+            let sector_size = 128usize << (n as usize);
+
+            let adjusted = if sector >= base { sector - base } else { return (false, 0, 0); };
+            if adjusted >= spt { return (false, 0, 0); }
+
+            let stride = self.track_stride_per_side();
+            if stride == 0 { return (false, 0, 0); }
+            let sides = if self.double_sided() { 2usize } else { 1usize };
+            let side_idx = if side_2 { 1usize } else { 0usize };
+            let track_offset = stride * (track as usize * sides + side_idx);
+
+            let index = track_offset + adjusted as usize * sector_size;
+            let last = index + sector_size;
+            if last > self.content.len() {
+                return (false, 0, 0);
+            }
+            return (true, index, last);
+        }
+
+        // Fallback: use the original flat layout mapping.
+        // The image layout interleaves sides: for each track, side 0 sectors
+        // come first, then side 1 sectors. Sector IDs map directly to slots.
         let base = self.sector_id_base();
         let adjusted = if sector >= base { sector - base } else { return (false, 0, 0); };
 
-        // For double-sided: remap side 1 sectors into the second half of the track
         let mapped_sector = if side_2 && adjusted < self.sectors_per_side() {
             adjusted + self.sectors_per_side()
         } else {
@@ -306,7 +349,7 @@ impl Media {
     }
 
     pub fn is_write_protected(&self) -> bool {
-        self.file.is_none()
+        self.write_protected
     }
 
     pub fn info(&self) -> String {
