@@ -356,7 +356,12 @@ impl FloppyController {
                     println!("FDC: Read sector setup: index={}, last={}, transfer_size={}", index, last, last - index);
                 }
             } else {
-                self.status = FDCStatus::SeekErrorOrRecordNotFound as u8;
+                // Real WD1793: the FDC searches for the sector ID as the disk
+                // rotates. After ~5 revolutions without finding it, BUSY clears
+                // and RNF is set. We set BUSY initially so the program's NMI
+                // handler has time to set up before the completion NMI fires.
+                // BUSY will clear on the next status poll (no data to transfer).
+                self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
                 if self.trace || self.trace_rw {
                     println!("FDC: Read sector FAILED: sector {} not found", sector);
                 }
@@ -388,7 +393,7 @@ impl FloppyController {
                 self.read_last = last;
                 self.status = FDCStatus::Busy as u8;
             } else {
-                self.status = FDCStatus::SeekErrorOrRecordNotFound as u8;
+                self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
             }
             self.raise_nmi = true;
 
