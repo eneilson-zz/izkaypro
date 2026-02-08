@@ -30,13 +30,13 @@
 # model = "kaypro4_83"
 
 # --- Kaypro 4/84 (default) ---
-# model = "kaypro4_84"
+model = "kaypro4_84"
 
 # --- TurboROM 3.4 ---
 # model = "turbo_rom"
 
 # --- KayPLUS 84 ---
- model = "kayplus_84"
+# model = "kayplus_84"
 
 # --- Custom configuration ---
 # model = "custom"
