@@ -40,9 +40,10 @@ pub enum MediaFormat {
     DsDd,     // Double-sided, double-density
 }
 
-const SECTOR_SIZE: usize = 512;
+const SECTOR_SIZE_DD: usize = 512;
+const SECTOR_SIZE_SD: usize = 256;
 
-fn detect_media_format(len: usize) -> MediaFormat {
+pub fn detect_media_format(len: usize) -> MediaFormat {
     if len == 102400 {
         MediaFormat::SsSd
     } else if (204800..=205824).contains(&len) {
@@ -64,6 +65,13 @@ pub struct Media {
     /// Standard Kaypro disks: 10 (sector IDs 10-19 on side 1)
     /// KayPLUS-formatted disks: 0 (sector IDs 0-9 on both sides)
     pub side1_sector_base: u8,
+    /// Sector size code learned from WRITE TRACK (IDAM N field).
+    /// When Some(n), overrides the default sector_size/sectors_per_side.
+    /// Allows formats like 5×1024 SSDD to coexist with 10×512 SSDD.
+    pub learned_n: Option<u8>,
+    /// Sector ID base learned from WRITE TRACK (minimum sector ID seen).
+    /// When Some(b), overrides the default sector_id_base().
+    pub learned_sector_base: Option<u8>,
 
     pub write_min: usize,
     pub write_max: usize,
@@ -84,20 +92,48 @@ impl Media {
     }
 
     pub fn sectors_per_side(&self) -> u8 {
-        match self.format {
-            MediaFormat::SsSd => 10,
-            MediaFormat::SsDd => 10,
-            MediaFormat::DsDd => 10,
-            MediaFormat::Unformatted => 0,
+        if let Some(n) = self.learned_n {
+            let sector_size = 128usize << (n as usize);
+            let bytes_per_side = self.content.len() / self.tracks() as usize
+                / if self.double_sided() { 2 } else { 1 };
+            (bytes_per_side / sector_size) as u8
+        } else {
+            match self.format {
+                MediaFormat::SsSd => 10,
+                MediaFormat::SsDd => 10,
+                MediaFormat::DsDd => 10,
+                MediaFormat::Unformatted => 0,
+            }
         }
     }
 
     pub fn sectors(&self) -> u8 {
-        match self.format {
-            MediaFormat::SsSd => 10,
-            MediaFormat::SsDd => 10,
-            MediaFormat::DsDd => 20,
-            MediaFormat::Unformatted => 0,
+        if self.double_sided() {
+            self.sectors_per_side() * 2
+        } else {
+            self.sectors_per_side()
+        }
+    }
+
+    pub fn sector_size(&self) -> usize {
+        if let Some(n) = self.learned_n {
+            128usize << (n as usize)
+        } else {
+            match self.format {
+                MediaFormat::SsSd => SECTOR_SIZE_SD,
+                _ => SECTOR_SIZE_DD,
+            }
+        }
+    }
+
+    pub fn sector_id_base(&self) -> u8 {
+        if let Some(base) = self.learned_sector_base {
+            base
+        } else {
+            match self.format {
+                MediaFormat::SsSd => 1,
+                _ => 0,
+            }
         }
     }
 
@@ -146,6 +182,8 @@ impl Media {
         self.name = filename.to_owned();
         self.content = content;
         self.format = format;
+        self.learned_n = None;
+        self.learned_sector_base = None;
 
         Ok(())
     }
@@ -169,17 +207,50 @@ impl Media {
         track < self.tracks()
     }
 
+    pub fn upgrade_to_double_sided(&mut self) {
+        if self.double_sided() {
+            return;
+        }
+        let tracks = self.tracks() as usize;
+        if tracks == 0 {
+            return;
+        }
+        let sector_size = self.sector_size();
+        let spt = self.sectors_per_side() as usize;
+        let bytes_per_side_track = spt * sector_size;
+        let new_len = tracks * 2 * bytes_per_side_track;
+        let mut new_content = vec![0xE5u8; new_len];
+        for t in 0..tracks {
+            let src_offset = t * bytes_per_side_track;
+            let dst_offset = t * 2 * bytes_per_side_track;
+            let copy_len = bytes_per_side_track.min(self.content.len().saturating_sub(src_offset));
+            if copy_len > 0 {
+                new_content[dst_offset..dst_offset + copy_len]
+                    .copy_from_slice(&self.content[src_offset..src_offset + copy_len]);
+            }
+        }
+        self.content = new_content;
+        self.format = MediaFormat::DsDd;
+        self.write_min = 0;
+        self.write_max = new_len - 1;
+    }
+
     pub fn read_address(&self, side_2: bool, track: u8, _sector: u8) -> (bool, u8) {
         if track >= self.tracks() || (side_2 && !self.double_sided()) {
-            // No formatted info - side 2 requested on single-sided disk
             return (false, 0);
         }
 
-        // READ ADDRESS returns the sector ID from the next sector header encountered.
-        // The base sector ID for side 1 depends on how the disk was physically formatted:
-        //   Standard Kaypro: side 0 = 0-9, side 1 = 10-19
-        //   KayPLUS format:  side 0 = 0-9, side 1 = 0-9
-        let base = if side_2 { self.side1_sector_base } else { 0 };
+        // READ ADDRESS returns the base sector ID for the current side.
+        // SSSD: sectors 1-10 on side 0 (1-based)
+        // DSDD standard Kaypro: side 0 = 0-9, side 1 = 10-19
+        // DSDD KayPLUS: side 0 = 0-9, side 1 = 0-9
+        let base = if self.format == MediaFormat::SsSd {
+            self.sector_id_base()
+        } else if side_2 {
+            self.side1_sector_base
+        } else {
+            0
+        };
         (true, base)
     }
 
@@ -191,17 +262,17 @@ impl Media {
             return (false, 0, 0);
         }
 
-        // Map the FDC sector ID to the disk image offset.
-        // The disk image stores sectors as: track0_side0(0-9), track0_side1(10-19), ...
-        // The FDC sector register may contain either:
-        //   - 0-9 for side 0, 10-19 for side 1 (standard Kaypro format)
-        //   - 0-9 for both sides (KayPLUS format, side selected via port 14)
-        // When side 1 is selected and sector < 10, remap by adding sectors_per_side
-        // to get the correct disk image position.
-        let mapped_sector = if side_2 && sector < self.sectors_per_side() {
-            sector + self.sectors_per_side()
+        // Map the FDC sector ID to a 0-based image slot index.
+        // SSSD uses 1-based sector IDs (1-10), subtract the base to get 0-based.
+        // DSDD uses 0-based on side 0 (0-9) and either 10-19 or 0-9 on side 1.
+        let base = self.sector_id_base();
+        let adjusted = if sector >= base { sector - base } else { return (false, 0, 0); };
+
+        // For double-sided: remap side 1 sectors into the second half of the track
+        let mapped_sector = if side_2 && adjusted < self.sectors_per_side() {
+            adjusted + self.sectors_per_side()
         } else {
-            sector
+            adjusted
         };
 
         if !side_2 && mapped_sector >= self.sectors_per_side() {
@@ -211,8 +282,12 @@ impl Media {
             return (false, 0, 0);
         }
 
-        let index = (track as usize * self.sectors() as usize + mapped_sector as usize) * SECTOR_SIZE;
-        let last = index + SECTOR_SIZE;
+        let sector_size = self.sector_size();
+        let index = (track as usize * self.sectors() as usize + mapped_sector as usize) * sector_size;
+        let last = index + sector_size;
+        if last > self.content.len() {
+            return (false, 0, 0);
+        }
         (true, index, last)
     }
 

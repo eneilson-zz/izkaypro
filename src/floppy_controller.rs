@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
-use super::media::*;
+use super::media::{self, *};
 
 // Fallback embedded disk images (used when external files can't be loaded)
 static FALLBACK_DISK_DSDD: &[u8] = include_bytes!("../disks/cpm22g-rom292a.img");
@@ -33,6 +33,7 @@ pub struct FloppyController {
     // WRITE TRACK state
     pub write_track_active: bool,
     write_track_buffer: Vec<u8>,
+    write_track_remaining: usize,
     multi_sector: bool,
 
     // Index pulse simulation - counter for toggling index bit
@@ -96,6 +97,15 @@ impl FloppyController {
             "Fallback Blank Disk (DSDD)",
         );
         
+        let format_a = match media::detect_media_format(disk_a_content.len()) {
+            MediaFormat::Unformatted => default_format,
+            f => f,
+        };
+        let format_b = match media::detect_media_format(disk_b_content.len()) {
+            MediaFormat::Unformatted => default_format,
+            f => f,
+        };
+
         FloppyController {
             motor_on: false,
             drive: 0,
@@ -112,8 +122,10 @@ impl FloppyController {
                     file: disk_a_file,
                     name: disk_a_name,
                     content: disk_a_content,
-                    format: default_format,
+                    format: format_a,
                     side1_sector_base,
+                    learned_n: None,
+                    learned_sector_base: None,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -121,8 +133,10 @@ impl FloppyController {
                     file: disk_b_file,
                     name: disk_b_name,
                     content: disk_b_content,
-                    format: default_format,
+                    format: format_b,
                     side1_sector_base,
+                    learned_n: None,
+                    learned_sector_base: None,
                     write_min: usize::MAX,
                     write_max: 0,
                 },
@@ -135,6 +149,7 @@ impl FloppyController {
 
             write_track_active: false,
             write_track_buffer: Vec::new(),
+            write_track_remaining: 0,
             multi_sector: false,
 
             status_read_count: 0,
@@ -215,12 +230,6 @@ impl FloppyController {
         self.media_selected().flush_disk();
         self.drive = drive;
     }
-
-    // Diagnostic accessors for crash tracing
-    pub fn get_status_raw(&self) -> u8 { self.status }
-    pub fn write_track_buf_len(&self) -> usize { self.write_track_buffer.len() }
-    pub fn data_buffer_len(&self) -> usize { self.data_buffer.len() }
-    pub fn side_2(&self) -> bool { self.side_2 }
 
     pub fn put_command(&mut self, command: u8) {
         self.last_command = command;
@@ -339,12 +348,18 @@ impl FloppyController {
                 self.read_index = index;
                 self.read_last = last;
                 self.status = FDCStatus::Busy as u8;
+                if self.trace || self.trace_rw {
+                    println!("FDC: Read sector setup: index={}, last={}, transfer_size={}", index, last, last - index);
+                }
             } else {
                 self.status = FDCStatus::SeekErrorOrRecordNotFound as u8;
+                if self.trace || self.trace_rw {
+                    println!("FDC: Read sector FAILED: sector {} not found", sector);
+                }
             }
             self.raise_nmi = true;
 
-        } else if (command & 0xe0) == 0xa0 {
+            } else if (command & 0xe0) == 0xa0 {
             // WRITE SECTOR command, type II
             // 101mSECa
             self.multi_sector = (command & 0x10) != 0;
@@ -422,6 +437,9 @@ impl FloppyController {
             }
 
             if self.write_track_active {
+                if self.trace || self.trace_rw {
+                    println!("FDC: Force interrupt while write_track_active, buf len={}", self.write_track_buffer.len());
+                }
                 self.finish_write_track();
             }
 
@@ -456,10 +474,11 @@ impl FloppyController {
                 return;
             }
             if self.trace || self.trace_rw {
-                println!("FDC: Write track (Si:{}, Tr:{}, Head:{})", self.side_2, self.head_position, self.head_position);
+                println!("FDC: Write track (Si:{}, Tr:{}, Head:{}, SD:{})", self.side_2, self.head_position, self.head_position, self.single_density);
             }
             self.write_track_active = true;
             self.write_track_buffer.clear();
+            self.write_track_remaining = if self.single_density { 3125 } else { 0 };
             self.status = FDCStatus::Busy as u8;
             self.raise_nmi = true;
         } else {
@@ -509,6 +528,15 @@ impl FloppyController {
                 status |= 0x02;
             }
         }
+        if (self.trace || self.trace_rw) && status & 0x1c != 0 {
+            println!("FDC: Status error bits: {:02x} (busy:{}, drq:{}, lost:{}, crc:{}, rnf:{})",
+                status,
+                status & 0x01 != 0,
+                status & 0x02 != 0,
+                status & 0x04 != 0,
+                status & 0x08 != 0,
+                status & 0x10 != 0);
+        }
         status
     }
 
@@ -541,7 +569,18 @@ impl FloppyController {
         if self.write_track_active {
             self.write_track_buffer.push(value);
             self.raise_nmi = true;
-            if self.write_track_buffer.len() >= 12000 {
+            if self.write_track_remaining > 0 {
+                self.write_track_remaining -= 1;
+                if self.write_track_remaining == 0 {
+                    if self.trace || self.trace_rw {
+                        println!("FDC: WriteTrack finishing (countdown reached 0, buf len={})", self.write_track_buffer.len());
+                    }
+                    self.finish_write_track();
+                }
+            } else if self.write_track_buffer.len() >= 12000 {
+                if self.trace || self.trace_rw {
+                    println!("FDC: WriteTrack finishing (safety limit 12000, buf len={})", self.write_track_buffer.len());
+                }
                 self.finish_write_track();
             }
             return;
@@ -616,6 +655,16 @@ impl FloppyController {
                 if self.trace {
                     println!("FDC: Get data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
+                if self.trace || self.trace_rw {
+                    let sector_size = self.media[self.drive as usize].sector_size();
+                    let start = self.read_last.saturating_sub(sector_size);
+                    let b0 = self.media[self.drive as usize].read_byte(start);
+                    let b1 = self.media[self.drive as usize].read_byte(start + 1);
+                    let b2 = self.media[self.drive as usize].read_byte(start + 2);
+                    let b3 = self.media[self.drive as usize].read_byte(start + 3);
+                    println!("FDC: Verify read sector {}: first 4 bytes = {:02x} {:02x} {:02x} {:02x}",
+                        self.sector, b0, b1, b2, b3);
+                }
                 if self.multi_sector {
                     // Auto-increment sector and continue to next
                     self.sector += 1;
@@ -678,54 +727,83 @@ impl FloppyController {
     fn finish_write_track(&mut self) {
         let side_2 = self.side_2;
         let track = self.head_position;
+
+        if side_2 && !self.media[self.drive as usize].double_sided() {
+            if self.trace || self.trace_rw {
+                println!("FDC: WriteTrack side 1 on single-sided disk — upgrading to DSDD");
+            }
+            self.media[self.drive as usize].upgrade_to_double_sided();
+        }
+
         let buf = &self.write_track_buffer;
         let mut sectors_written = 0;
+        let mut learned_n: Option<u8> = None;
+        let mut min_sector_id: u8 = 255;
 
-        // Parse the WD1793 WRITE TRACK data stream:
-        // IDAM sequence: F5 F5 F5 FE C H R N F7
-        // DAM sequence:  F5 F5 F5 FB/F8 <data> F7
-        // F5 = sync A1 (missing clock), F7 = CRC generation (not literal)
+        // Sync byte depends on density:
+        //   MFM (double density): F5 F5 F5 = A1 sync with missing clock
+        //   FM  (single density): 00 00 00 = zero-fill gap
+        let sync = if self.single_density { 0x00u8 } else { 0xF5u8 };
+
         let mut i = 0;
         while i + 3 < buf.len() {
-            // Look for IDAM: F5 F5 F5 FE
-            if buf[i] == 0xF5 && buf[i+1] == 0xF5 && buf[i+2] == 0xF5 && buf[i+3] == 0xFE {
-                i += 4; // Skip sync + IDAM mark
+            if buf[i] == sync && buf[i+1] == sync && buf[i+2] == sync && buf[i+3] == 0xFE {
+                i += 4;
                 if i + 4 >= buf.len() { break; }
 
                 let _id_track = buf[i];
                 let _id_head = buf[i+1];
                 let id_sector = buf[i+2];
                 let id_n = buf[i+3];
-                let sector_size = 128usize << (id_n as usize);
-                i += 4; // Skip CHRN
+                let stream_size = 128usize << (id_n as usize);
+                if id_sector < min_sector_id {
+                    min_sector_id = id_sector;
+                    if self.media[self.drive as usize].learned_sector_base.is_none() {
+                        self.media[self.drive as usize].learned_sector_base = Some(id_sector);
+                    } else if Some(id_sector) < self.media[self.drive as usize].learned_sector_base {
+                        self.media[self.drive as usize].learned_sector_base = Some(id_sector);
+                    }
+                }
+                if learned_n.is_none() {
+                    learned_n = Some(id_n);
+                    self.media[self.drive as usize].learned_n = Some(id_n);
+                }
+                i += 4;
 
-                // Skip CRC marker (F7)
                 if i < buf.len() && buf[i] == 0xF7 { i += 1; }
 
-                // Scan forward for DAM: F5 F5 F5 FB or F5 F5 F5 F8
+                // Scan forward for DAM
                 while i + 3 < buf.len() {
-                    if buf[i] == 0xF5 && buf[i+1] == 0xF5 && buf[i+2] == 0xF5
+                    if buf[i] == sync && buf[i+1] == sync && buf[i+2] == sync
                         && (buf[i+3] == 0xFB || buf[i+3] == 0xF8) {
-                        i += 4; // Skip sync + DAM
+                        i += 4;
                         break;
                     }
                     i += 1;
                 }
 
-                // Read sector data
-                if i + sector_size > buf.len() { break; }
+                // Write stream_size bytes to the image. The IDAM N field defines
+                // the actual sector size for this format (e.g., 1024 for N=3 SSDD).
+                let write_len = stream_size;
+                if i + stream_size > buf.len() { break; }
 
                 let (valid, index, _last) = self.media[self.drive as usize]
                     .sector_index(side_2, track, id_sector);
                 if valid {
-                    for j in 0..sector_size {
+                    if self.trace || self.trace_rw {
+                        println!("FDC: WriteTrack sector {} at buf[{}], media index {}, len {}, id_n={}, stream_size={}",
+                            id_sector, i, index, write_len, id_n, stream_size);
+                    }
+                    for j in 0..write_len {
                         self.media[self.drive as usize].write_byte(index + j, buf[i + j]);
                     }
                     sectors_written += 1;
+                } else if self.trace || self.trace_rw {
+                    println!("FDC: WriteTrack sector {} at buf[{}] INVALID (sector_index returned false)",
+                        id_sector, i);
                 }
-                i += sector_size;
+                i += stream_size;
 
-                // Skip CRC marker (F7)
                 if i < buf.len() && buf[i] == 0xF7 { i += 1; }
             } else {
                 i += 1;
@@ -733,8 +811,21 @@ impl FloppyController {
         }
 
         if self.trace || self.trace_rw {
-            println!("FDC: Write track complete (Si:{}, Tr:{}, {} sectors formatted)",
-                side_2, track, sectors_written);
+            println!("FDC: Write track complete (Si:{}, Tr:{}, {} sectors, SD:{}, buf:{})",
+                side_2, track, sectors_written, self.single_density, buf.len());
+        }
+
+        // Learn sector geometry from IDAM fields
+        if learned_n.is_some() && min_sector_id != 255 {
+            let media = &mut self.media[self.drive as usize];
+            if media.learned_sector_base.is_none() {
+                media.learned_sector_base = Some(min_sector_id);
+            }
+            if self.trace || self.trace_rw {
+                println!("FDC: Learned sector geometry: N={}, sector_size={}, sectors_per_side={}, sector_base={}",
+                    learned_n.unwrap(), media.sector_size(),
+                    media.sectors_per_side(), media.sector_id_base());
+            }
         }
 
         self.media[self.drive as usize].flush_disk();
