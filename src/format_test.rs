@@ -507,4 +507,120 @@ mod tests {
         }
         assert_eq!(failed_sectors, 0, "Xerox 820-II DSDD mixed-density: {} sectors failed", failed_sectors);
     }
+
+    /// Reproduce the crash when a DSDD machine (Kaypro 4-84) reads an SSDD disk.
+    /// The BIOS does: Restore, Read Address side 0, Read Address side 1.
+    /// Side 1 fails (SSDD has no side 1). The FDC must behave like a real WD1793:
+    /// stay BUSY while scanning for sector headers, then clear BUSY with RNF set.
+    #[test]
+    fn test_ssdd_disk_in_dsdd_machine() {
+        let ssdd_image = vec![0xE5u8; 204800]; // SSDD = 204800 bytes
+
+        let mut fdc = FloppyController::new(
+            "__nonexistent_test_a__",
+            "__nonexistent_test_b__",
+            MediaFormat::DsDd, // DSDD machine
+            10,                // Standard Kaypro side1_sector_base
+            true,
+            true,
+        );
+
+        // Load SSDD image in drive B
+        fdc.media_b_mut().content = ssdd_image;
+        fdc.media_b_mut().format = MediaFormat::SsDd;
+        fdc.media_b_mut().learned_n = None;
+        fdc.media_b_mut().learned_sector_base = None;
+        fdc.media_b_mut().track_geometry.clear();
+        fdc.media_b_mut().write_protected = false;
+
+        fdc.set_drive(1);
+        fdc.set_motor(true);
+
+        // Step 1: Force Interrupt (BIOS init)
+        fdc.put_command(0xD0);
+
+        // Step 2: Restore (seek to track 0)
+        fdc.put_command(0x00);
+        assert_eq!(fdc.head_position, 0, "Head should be at track 0 after Restore");
+        assert!(fdc.raise_nmi, "Restore should raise NMI");
+        fdc.raise_nmi = false;
+
+        // Step 3: Read status (BIOS checks track 0)
+        let status = fdc.get_status();
+        eprintln!("  Status after Restore: 0x{:02x}", status);
+        assert!(status & 0x04 != 0, "Track 0 bit should be set");
+
+        // Step 4: Read Address on side 0 — should succeed
+        fdc.set_side(false);
+        fdc.put_command(0xC0);
+        assert!(fdc.raise_nmi, "Read Address side 0 should raise NMI");
+        fdc.raise_nmi = false;
+
+        // Poll status until BUSY clears (countdown)
+        let mut busy_count = 0;
+        for _ in 0..20 {
+            let s = fdc.get_status();
+            if s & 0x01 == 0 { break; }
+            busy_count += 1;
+        }
+        eprintln!("  Read Address side 0: busy for {} polls", busy_count);
+
+        let status = fdc.get_status();
+        assert!(status & 0x10 == 0, "Side 0 Read Address should NOT have RNF error");
+
+        // Read the 6-byte ID field
+        for _ in 0..6 {
+            fdc.get_data();
+        }
+
+        // Step 5: Read Address on side 1 — should fail (SSDD has no side 1)
+        // On a real WD1793, this stays BUSY while scanning, then sets RNF.
+        fdc.set_side(true);
+        fdc.put_command(0xC0);
+        assert!(fdc.raise_nmi, "Read Address side 1 should raise NMI");
+        fdc.raise_nmi = false;
+
+        // The error path MUST set BUSY with a countdown (like the success path)
+        // so the BIOS can poll and see BUSY→not-BUSY transition before checking RNF.
+        let status_immediate = fdc.get_status();
+        eprintln!("  Read Address side 1 immediate status: 0x{:02x} (busy:{})",
+            status_immediate, status_immediate & 0x01 != 0);
+
+        // Poll until BUSY clears
+        let mut final_status = status_immediate;
+        for _ in 0..20 {
+            final_status = fdc.get_status();
+            if final_status & 0x01 == 0 { break; }
+        }
+        eprintln!("  Read Address side 1 final status: 0x{:02x} (rnf:{})",
+            final_status, final_status & 0x10 != 0);
+        assert!(final_status & 0x10 != 0, "Side 1 Read Address should have RNF error");
+
+        // Step 6: After the error, try reading sector 0 on side 0 track 0.
+        // The BIOS should still be able to read SSDD sectors.
+        fdc.set_side(false);
+        fdc.head_position = 0;
+        fdc.put_sector(0);
+        fdc.put_command(0x80); // READ SECTOR
+        assert!(fdc.raise_nmi, "Read Sector should raise NMI");
+        fdc.raise_nmi = false;
+
+        let status = fdc.get_status();
+        eprintln!("  Read Sector side 0 sector 0 status: 0x{:02x} (busy:{}, rnf:{})",
+            status, status & 0x01 != 0, status & 0x10 != 0);
+
+        // Should be BUSY with data ready (not RNF)
+        assert!(status & 0x01 != 0, "Read Sector should be BUSY");
+        assert!(status & 0x10 == 0, "Read Sector side 0 sector 0 should NOT have RNF");
+
+        // Read 512 bytes of sector data
+        let mut sector_data = Vec::new();
+        for _ in 0..512 {
+            sector_data.push(fdc.get_data());
+        }
+        let all_e5 = sector_data.iter().all(|&b| b == 0xE5);
+        assert!(all_e5, "Sector data should be all 0xE5");
+
+        eprintln!("  PASS: SSDD disk in DSDD machine - side 0 readable, side 1 returns RNF");
+    }
 }

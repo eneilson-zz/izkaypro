@@ -437,8 +437,12 @@ impl FloppyController {
                 if self.trace {
                     println!("FDC: Read address ({},{},{}) = Error", side_2, track, sector);
                 }
-                self.status = FDCStatus::SeekErrorOrRecordNotFound as u8;
-                self.read_address_countdown = 0;
+                // Real WD1793: stays BUSY while scanning for sector headers
+                // (~5 revolutions), then clears BUSY and sets RNF. Use the
+                // same countdown as the success path so the BIOS sees the
+                // BUSY→not-BUSY transition it expects before checking error bits.
+                self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
+                self.read_address_countdown = 10;
                 self.raise_nmi = true;
             }
         } else if (command & 0xf0) == 0xd0 {
@@ -510,7 +514,9 @@ impl FloppyController {
         if self.read_address_countdown > 0 {
             self.read_address_countdown -= 1;
             if self.read_address_countdown == 0 {
-                self.status = FDCStatus::NoError as u8;
+                // Clear BUSY but preserve error bits (e.g., RNF from
+                // READ ADDRESS on a non-existent side).
+                self.status &= !(FDCStatus::Busy as u8);
             }
         }
 
@@ -530,8 +536,10 @@ impl FloppyController {
                     self.status_polls_without_data = 0;
                     status = self.status;
                 }
+            } else if self.read_address_countdown > 0 {
+                status |= FDCStatus::DataRequest as u8;
             } else {
-                self.status = FDCStatus::NoError as u8;
+                self.status &= !(FDCStatus::Busy as u8);
                 self.status_polls_without_data = 0;
                 status = self.status;
             }
