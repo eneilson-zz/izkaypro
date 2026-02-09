@@ -80,14 +80,13 @@ mod tests {
     ) -> usize {
         let blank = vec![0xE5u8; image_size];
 
-        let enable_trace = name.contains("Advent 1k DSDD");
         let mut fdc = FloppyController::new(
             "__nonexistent_test_a__",
             "__nonexistent_test_b__",
             format,
             side1_sector_base,
-            enable_trace,
-            enable_trace,
+            false,
+            false,
         );
 
         fdc.media_b_mut().content = blank;
