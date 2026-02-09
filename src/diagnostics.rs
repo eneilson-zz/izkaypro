@@ -503,6 +503,15 @@ pub struct BootTestConfig {
 pub fn run_boot_tests() -> Vec<TestResult> {
     let configs = vec![
         BootTestConfig {
+            name: "Kaypro II (81-149c)",
+            rom_path: "roms/81-149c.rom",
+            video_mode: crate::kaypro_machine::VideoMode::MemoryMapped,
+            disk_format: crate::media::MediaFormat::SsDd,
+            disk_a: "disks/cpm22-rom149.img",
+            disk_b: "disks/cpm22-rom149-blank.img",
+            side1_sector_base: 10,
+        },
+        BootTestConfig {
             name: "Kaypro 4/84 (81-292a)",
             rom_path: "roms/81-292a.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,

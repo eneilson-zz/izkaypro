@@ -160,6 +160,37 @@ impl Config {
             }
         }
     }
+
+    /// Apply command-line overrides to the configuration.
+    /// CLI arguments take priority over TOML config file settings.
+    pub fn apply_cli_overrides(&mut self, model: Option<&str>, rom: Option<&str>, drivea: Option<&str>, driveb: Option<&str>) {
+        if let Some(m) = model {
+            self.model = match m {
+                "kaypro_ii" => KayproModel::KayproII,
+                "kaypro4_83" => KayproModel::Kaypro4_83,
+                "kaypro4_84" => KayproModel::Kaypro4_84,
+                "turbo_rom" => KayproModel::TurboRom,
+                "kayplus_84" => KayproModel::KayPlus84,
+                "custom" => KayproModel::Custom,
+                _ => {
+                    eprintln!("Warning: Unknown model '{}', using default", m);
+                    self.model
+                }
+            };
+        }
+        if let Some(r) = rom {
+            self.rom_file = Some(r.to_string());
+            if self.model != KayproModel::Custom {
+                self.model = KayproModel::Custom;
+            }
+        }
+        if let Some(a) = drivea {
+            self.disk_a = Some(a.to_string());
+        }
+        if let Some(b) = driveb {
+            self.disk_b = Some(b.to_string());
+        }
+    }
     
     /// Get the ROM file path for this configuration
     pub fn get_rom_path(&self) -> &str {

@@ -1,4 +1,4 @@
-use clap::{Arg, App};
+use clap::Parser;
 use iz80::*;
 use std::time::{Duration, Instant};
 
@@ -19,88 +19,114 @@ use self::floppy_controller::FloppyController;
 use self::screen::Screen;
 use self::keyboard_unix::Command;
 
+#[derive(Parser)]
+#[command(
+    name = "izkaypro",
+    about = "Kaypro computer emulator for the terminal",
+    long_about = "izkaypro - Kaypro Emulator\n\
+        https://github.com/ivanizag/izkaypro\n\n\
+        Emulates Kaypro II, 4/83, 2X/4/84, TurboROM, and KayPLUS computers.\n\
+        Configuration is loaded from izkaypro.toml; command-line arguments override config file settings.",
+    version,
+)]
+struct Cli {
+    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, kayplus_84, custom]
+    #[arg(short = 'm', long, value_name = "MODEL")]
+    model: Option<String>,
+
+    /// Disk image file for drive A
+    #[arg(short = 'a', long, value_name = "FILE")]
+    drivea: Option<String>,
+
+    /// Disk image file for drive B
+    #[arg(short = 'b', long, value_name = "FILE")]
+    driveb: Option<String>,
+
+    /// Custom ROM file (implies --model=custom)
+    #[arg(long, value_name = "FILE")]
+    rom: Option<String>,
+
+    /// CPU clock speed in MHz (1-100, default: unlimited)
+    #[arg(long, value_name = "MHZ")]
+    speed: Option<f64>,
+
+    /// Trace CPU instruction execution
+    #[arg(short = 'c', long)]
+    cpu_trace: bool,
+
+    /// Trace I/O port access
+    #[arg(short = 'i', long)]
+    io_trace: bool,
+
+    /// Trace floppy disk controller commands
+    #[arg(short = 'f', long)]
+    fdc_trace: bool,
+
+    /// Trace floppy disk controller read/write data
+    #[arg(short = 'w', long)]
+    fdc_trace_rw: bool,
+
+    /// Trace system bit changes
+    #[arg(short = 's', long)]
+    system_bits: bool,
+
+    /// Trace ROM entry point calls
+    #[arg(short = 'r', long)]
+    rom_trace: bool,
+
+    /// Trace CP/M BDOS calls
+    #[arg(long)]
+    bdos_trace: bool,
+
+    /// Trace SY6545 CRTC VRAM writes
+    #[arg(short = 'v', long)]
+    crtc_trace: bool,
+
+    /// Enable all trace options
+    #[arg(long)]
+    trace_all: bool,
+
+    /// Run ROM and RAM diagnostics then exit
+    #[arg(short = 'd', long)]
+    diagnostics: bool,
+
+    /// Run headless boot tests for all Kaypro models then exit
+    #[arg(long)]
+    boot_test: bool,
+}
 
 fn main() {
-    // Load configuration from file (or use defaults)
-    let config = Config::load();
+    let cli = Cli::parse();
+
+    // Load configuration from file, then apply CLI overrides
+    let mut config = Config::load();
+    config.apply_cli_overrides(
+        cli.model.as_deref(),
+        cli.rom.as_deref(),
+        cli.drivea.as_deref(),
+        cli.driveb.as_deref(),
+    );
+
     let welcome = format!(
         "izkaypro - Kaypro Emulator\nhttps://github.com/ivanizag/izkaypro\nConfiguration: {}",
         config.get_description()
     );
-    
-    // Parse arguments
-    let matches = App::new(&welcome[..])
-        .arg(Arg::with_name("DISKA")
-            .help("Disk A: image file. Empty or $ to use config default")
-            .required(false)
-            .index(1))
-        .arg(Arg::with_name("DISKB")
-            .help("Disk B: image file. Empty to use config default")
-            .required(false)
-            .index(2))
-        .arg(Arg::with_name("cpu_trace")
-            .short("c")
-            .long("cpu-trace")
-            .help("Traces CPU instructions execuions"))
-        .arg(Arg::with_name("io_trace")
-            .short("i")
-            .long("io-trace")
-            .help("Traces ports IN and OUT"))
-        .arg(Arg::with_name("fdc_trace")
-            .short("f")
-            .long("fdc-trace")
-            .help("Traces access to the floppy disk controller"))
-        .arg(Arg::with_name("fdc_trace_rw")
-            .short("w")
-            .long("fdc-trace-rw")
-            .help("Traces RW access to the floppy disk controller"))
-        .arg(Arg::with_name("system_bits")
-            .short("s")
-            .long("system-bits")
-            .help("Traces changes to the system bits values"))
-        .arg(Arg::with_name("rom_trace")
-            .short("r")
-            .long("rom-trace")
-            .help("Traces calls to the ROM entrypoints"))
-        .arg(Arg::with_name("bdos_trace")
-            .short("b")
-            .long("bdos-trace")
-            .help("Traces calls to the CP/M BDOS entrypoints"))
-        .arg(Arg::with_name("crtc_trace")
-            .short("v")
-            .long("crtc-trace")
-            .help("Traces SY6545 CRTC VRAM writes"))
-        .arg(Arg::with_name("run_diag")
-            .short("d")
-            .long("diagnostics")
-            .help("Run ROM and RAM diagnostics then exit"))
-        .arg(Arg::with_name("boot_test")
-            .long("boot-test")
-            .help("Run headless boot tests for all Kaypro models then exit"))
-        .get_matches();
 
-    // Command line disk overrides (or use config defaults)
-    let disk_a_path = matches.value_of("DISKA")
-        .filter(|s| *s != "$")
-        .map(|s| s.to_string())
-        .or_else(|| config.disk_a.clone())
+    let disk_a_path = config.disk_a.clone()
         .unwrap_or_else(|| config.get_default_disk_a().to_string());
-    
-    let disk_b_path = matches.value_of("DISKB")
-        .map(|s| s.to_string())
-        .or_else(|| config.disk_b.clone())
+    let disk_b_path = config.disk_b.clone()
         .unwrap_or_else(|| config.get_default_disk_b().to_string());
-    
-    let mut trace_cpu = matches.is_present("cpu_trace");
-    let trace_io = matches.is_present("io_trace");
-    let trace_fdc = matches.is_present("fdc_trace");
-    let trace_fdc_rw = matches.is_present("fdc_trace_rw");
-    let trace_system_bits = matches.is_present("system_bits");
-    let trace_rom = matches.is_present("rom_trace");
-    let trace_bdos = matches.is_present("bdos_trace");
-    let trace_crtc = matches.is_present("crtc_trace");
-    let run_diag = matches.is_present("run_diag");
-    let run_boot_test = matches.is_present("boot_test");
+
+    let mut trace_cpu = cli.cpu_trace || cli.trace_all;
+    let trace_io = cli.io_trace || cli.trace_all;
+    let trace_fdc = cli.fdc_trace || cli.trace_all;
+    let trace_fdc_rw = cli.fdc_trace_rw || cli.trace_all;
+    let trace_system_bits = cli.system_bits || cli.trace_all;
+    let trace_rom = cli.rom_trace || cli.trace_all;
+    let trace_bdos = cli.bdos_trace || cli.trace_all;
+    let trace_crtc = cli.crtc_trace || cli.trace_all;
+    let run_diag = cli.diagnostics;
+    let run_boot_test = cli.boot_test;
 
     let any_trace = trace_io
         || trace_cpu
@@ -165,7 +191,16 @@ fn main() {
 
     // Clock speed control: None = unlimited, Some(mhz) = fixed speed
     // Average ~4 T-states per instruction, so cycles_per_sec = mhz * 1_000_000
-    let mut clock_mhz: Option<f64> = None;
+    let mut clock_mhz: Option<f64> = cli.speed.and_then(|mhz| {
+        if mhz < 0.0 {
+            None
+        } else if mhz >= 1.0 && mhz <= 100.0 {
+            Some((mhz * 2.0).round() / 2.0)
+        } else {
+            eprintln!("Warning: --speed must be 1-100 MHz, ignoring");
+            None
+        }
+    });
     let mut cycle_count: u64 = 0;
     let mut speed_start_time = Instant::now();
     const CYCLES_PER_INSTRUCTION: u64 = 4; // Average Z80 cycles per instruction

@@ -1,14 +1,14 @@
 [package]
 name = "izkaypro"
-version = "0.1.1"
-authors = ["Ivan Izaguirre <ivanizag@gmail.com>"]
+version = "0.9.0"
+authors = ["Ivan Izaguirre <ivanizag@gmail.com>", "Eric Neilson <eric@neilsonhart.com>"]
 edition = "2018"
 repository = "https://github.com/ivanizag/izkaypro"
 
 [dependencies]
 iz80 = "^0.3.5"
 #iz80 = {path = "../iz80"}
-clap = "^2"
+clap = { version = "4", features = ["derive"] }
 termios = "^0.3.3"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
