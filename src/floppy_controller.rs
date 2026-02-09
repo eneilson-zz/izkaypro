@@ -34,6 +34,9 @@ pub struct FloppyController {
     pub write_track_active: bool,
     write_track_buffer: Vec<u8>,
     write_track_remaining: usize,
+    write_track_drive: u8,    // Drive latched at WRITE TRACK start
+    write_track_side: bool,   // Side latched at WRITE TRACK start
+    write_track_head: u8,     // Head position latched at WRITE TRACK start
     multi_sector: bool,
 
     // Index pulse simulation - counter for toggling index bit
@@ -154,6 +157,9 @@ impl FloppyController {
             write_track_active: false,
             write_track_buffer: Vec::new(),
             write_track_remaining: 0,
+            write_track_drive: 0,
+            write_track_side: false,
+            write_track_head: 0,
             multi_sector: false,
 
             status_read_count: 0,
@@ -231,13 +237,34 @@ impl FloppyController {
     }
 
     pub fn set_drive(&mut self, drive: u8) {
-        self.media_selected().flush_disk();
-        self.drive = drive;
+        if drive != self.drive {
+            if self.write_track_active {
+                if self.trace {
+                    println!("FDC: Drive select {} -> {} IGNORED (write track active on drive {})",
+                        self.drive, drive, self.write_track_drive);
+                }
+                return;
+            }
+            self.media_selected().flush_disk();
+            if self.trace {
+                println!("FDC: Drive select {} -> {}", self.drive, drive);
+            }
+            self.drive = drive;
+        }
     }
 
     pub fn put_command(&mut self, command: u8) {
         self.last_command = command;
         self.last_command_count += 1;
+
+        if self.write_track_active && (command & 0xf0) != 0xd0 {
+            if self.trace || self.trace_rw {
+                println!("FDC: New command 0x{:02x} while write_track_active, finishing write track (buf len={})",
+                    command, self.write_track_buffer.len());
+            }
+            self.finish_write_track();
+        }
+
         self.media_selected().flush_disk();
 
         if (command & 0xf0) == 0x00 {
@@ -491,9 +518,12 @@ impl FloppyController {
                 return;
             }
             if self.trace || self.trace_rw {
-                println!("FDC: Write track (Si:{}, Tr:{}, Head:{}, SD:{})", self.side_2, self.head_position, self.head_position, self.single_density);
+                println!("FDC: Write track (Drive:{}, Si:{}, Tr:{}, Head:{}, SD:{})", self.drive, self.side_2, self.head_position, self.head_position, self.single_density);
             }
             self.write_track_active = true;
+            self.write_track_drive = self.drive;
+            self.write_track_side = self.side_2;
+            self.write_track_head = self.head_position;
             self.write_track_buffer.clear();
             self.write_track_remaining = if self.single_density { 3125 } else { 0 };
             self.status = FDCStatus::Busy as u8;
@@ -752,14 +782,15 @@ impl FloppyController {
     }
 
     fn finish_write_track(&mut self) {
-        let side_2 = self.side_2;
-        let track = self.head_position;
+        let drive = self.write_track_drive as usize;
+        let side_2 = self.write_track_side;
+        let track = self.write_track_head;
 
-        if side_2 && !self.media[self.drive as usize].double_sided() {
+        if side_2 && !self.media[drive].double_sided() {
             if self.trace || self.trace_rw {
                 println!("FDC: WriteTrack side 1 on single-sided disk — upgrading to DSDD");
             }
-            self.media[self.drive as usize].upgrade_to_double_sided();
+            self.media[drive].upgrade_to_double_sided();
         }
 
         let buf = &self.write_track_buffer;
@@ -817,16 +848,16 @@ impl FloppyController {
                 sector_count,
                 sector_base: min_sector_id,
             };
-            self.media[self.drive as usize].track_geometry.insert((track, side_2), geom);
+            self.media[drive].track_geometry.insert((track, side_2), geom);
 
             // Set global learned_n as fallback (use the first non-trivial N seen)
-            if self.media[self.drive as usize].learned_n.is_none() {
-                self.media[self.drive as usize].learned_n = Some(n);
+            if self.media[drive].learned_n.is_none() {
+                self.media[drive].learned_n = Some(n);
             }
-            if self.media[self.drive as usize].learned_sector_base.is_none() {
-                self.media[self.drive as usize].learned_sector_base = Some(min_sector_id);
-            } else if Some(min_sector_id) < self.media[self.drive as usize].learned_sector_base {
-                self.media[self.drive as usize].learned_sector_base = Some(min_sector_id);
+            if self.media[drive].learned_sector_base.is_none() {
+                self.media[drive].learned_sector_base = Some(min_sector_id);
+            } else if Some(min_sector_id) < self.media[drive].learned_sector_base {
+                self.media[drive].learned_sector_base = Some(min_sector_id);
             }
         }
 
@@ -859,7 +890,7 @@ impl FloppyController {
                 let write_len = stream_size;
                 if i + stream_size > buf.len() { break; }
 
-                let (valid, index, _last) = self.media[self.drive as usize]
+                let (valid, index, _last) = self.media[drive]
                     .sector_index(side_2, track, id_sector);
                 if valid {
                     if self.trace || self.trace_rw {
@@ -867,7 +898,7 @@ impl FloppyController {
                             id_sector, i, index, write_len, id_n, stream_size);
                     }
                     for j in 0..write_len {
-                        self.media[self.drive as usize].write_byte(index + j, buf[i + j]);
+                        self.media[drive].write_byte(index + j, buf[i + j]);
                     }
                     sectors_written += 1;
                 } else if self.trace || self.trace_rw {
@@ -888,7 +919,7 @@ impl FloppyController {
         }
 
         if track_learned_n.is_some() && min_sector_id != 255 {
-            let media = &self.media[self.drive as usize];
+            let media = &self.media[drive];
             if self.trace || self.trace_rw {
                 println!("FDC: Track {}/{} geometry: N={}, sectors={}, sector_base={}",
                     track, if side_2 { "S1" } else { "S0" },
@@ -902,7 +933,7 @@ impl FloppyController {
             }
         }
 
-        self.media[self.drive as usize].flush_disk();
+        self.media[drive].flush_disk();
         self.write_track_active = false;
         self.status = FDCStatus::NoError as u8;
         self.raise_nmi = true;
