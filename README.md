@@ -58,6 +58,10 @@ Optional: override default disk images by adding:
 disk_a = "disks/my_boot_disk.img"
 disk_b = "disks/my_data_disk.img"
 ```
+## How to build and run
+From the main directory:  
+- To build type **cargo build --release**  
+- To run **../target/release/izkaypro**  
 
 ## Usage examples
 
