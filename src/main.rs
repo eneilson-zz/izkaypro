@@ -8,6 +8,7 @@ mod floppy_controller;
 mod keyboard_unix;
 mod media;
 mod screen;
+mod sio;
 mod sy6545;
 mod diagnostics;
 #[cfg(test)]
@@ -82,6 +83,10 @@ struct Cli {
     #[arg(short = 'v', long)]
     crtc_trace: bool,
 
+    /// Trace SIO-1 Channel A serial port
+    #[arg(long)]
+    sio_trace: bool,
+
     /// Enable all trace options
     #[arg(long)]
     trace_all: bool,
@@ -125,6 +130,7 @@ fn main() {
     let trace_rom = cli.rom_trace || cli.trace_all;
     let trace_bdos = cli.bdos_trace || cli.trace_all;
     let trace_crtc = cli.crtc_trace || cli.trace_all;
+    let trace_sio = cli.sio_trace || cli.trace_all;
     let run_diag = cli.diagnostics;
     let run_boot_test = cli.boot_test;
 
@@ -135,6 +141,7 @@ fn main() {
         || trace_rom
         || trace_bdos
         || trace_crtc
+        || trace_sio
         || trace_system_bits;
 
     // Init device with configuration
@@ -154,6 +161,7 @@ fn main() {
         trace_io,
         trace_system_bits,
         trace_crtc,
+        trace_sio,
     );
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);

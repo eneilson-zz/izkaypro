@@ -4,6 +4,7 @@ use std::io::{Write};
 use iz80::Machine;
 use super::FloppyController;
 use super::keyboard_unix::Keyboard;
+use super::sio::Sio;
 use super::sy6545::Sy6545;
 
 /* Memory map:
@@ -100,6 +101,7 @@ pub struct KayproMachine {
 
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
+    pub sio: Sio,
 }
 
 impl KayproMachine {
@@ -110,6 +112,7 @@ impl KayproMachine {
         trace_io: bool,
         trace_system_bits: bool,
         trace_crtc: bool,
+        trace_sio: bool,
     ) -> KayproMachine {
         // Load ROM from file, fall back to embedded if not found
         let rom_data = Self::load_rom_or_fallback(rom_path);
@@ -142,6 +145,7 @@ impl KayproMachine {
             trace_system_bits,
             keyboard: Keyboard::new(),
             floppy_controller,
+            sio: Sio::new(trace_sio),
         }
     }
     
@@ -436,12 +440,16 @@ impl Machine for KayproMachine {
             return
         }
 
-        if self.trace_io && port != 0x1c {
+        if self.trace_io && port != 0x1c && port != 0x14 {
             println!("OUT(0x{:02x} '{}', 0x{:02x}): ", port, IO_PORT_NAMES[port as usize], value);
         }
         match port {
-            // SIO control ports
-            0x06 => {} // SIO A control - ignored for now
+            // 8116 Baud Rate Generator
+            0x00 => self.sio.set_baud_rate_code(value),
+            // SIO-1 Channel A
+            0x04 => self.sio.write_data(value),
+            0x06 => self.sio.write_control(value),
+            // SIO-1 Channel B (keyboard)
             0x07 => self.sio_b_write_control(value),
             // Floppy controller
             0x10 => self.floppy_controller.put_command(value),
@@ -499,6 +507,9 @@ impl Machine for KayproMachine {
         }
 
         let value = match port {
+            // SIO-1 Channel A
+            0x04 => self.sio.read_data(),
+            0x06 => self.sio.read_control(),
 
             0x05 => {
                 self.sio_int_pending = false;
@@ -549,7 +560,7 @@ impl Machine for KayproMachine {
             _ => 0xca,
         }; 
 
-        if self.trace_io && port != 0x13 && port != 0x07 && port != 0x1c {
+        if self.trace_io && port != 0x13 && port != 0x07 && port != 0x1c && port != 0x14 {
             println!("IN(0x{:02x} '{}') = 0x{:02x}", port, IO_PORT_NAMES[port as usize], value);
         }
         value
