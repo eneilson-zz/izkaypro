@@ -444,8 +444,14 @@ impl Machine for KayproMachine {
             println!("OUT(0x{:02x} '{}', 0x{:02x}): ", port, IO_PORT_NAMES[port as usize], value);
         }
         match port {
-            // 8116 Baud Rate Generator
-            0x00 => self.sio.set_baud_rate_code(value),
+            // 8116 Baud Rate Generator — only accept from user programs (RAM mode).
+            // TurboROM's BIOS writes to port 0x00 for internal purposes,
+            // which would corrupt the serial baud rate set by QTerm.
+            0x00 => {
+                if !self.is_rom_rank() {
+                    self.sio.set_baud_rate_code(value);
+                }
+            },
             // SIO-1 Channel A
             0x04 => self.sio.write_data(value),
             0x06 => self.sio.write_control(value),
@@ -507,8 +513,12 @@ impl Machine for KayproMachine {
         }
 
         let value = match port {
-            // SIO-1 Channel A
-            0x04 => self.sio.read_data(),
+            // SIO-1 Channel A data — only drain Rx FIFO from user programs.
+            // TurboROM's BIOS continuously reads port 0x04, which would
+            // steal bytes from QTerm's Rx stream.
+            0x04 => {
+                if self.is_rom_rank() { 0 } else { self.sio.read_data() }
+            },
             0x06 => self.sio.read_control(),
 
             0x05 => {

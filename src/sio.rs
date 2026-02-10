@@ -16,6 +16,8 @@ use std::time::Instant;
 /// - After the pointed register is written, the pointer resets to WR0
 /// - Read from control port targets RR0 by default (WR0 pointer selects RR0-RR2)
 
+const RX_FIFO_CAPACITY: usize = 3; // Real SIO has 3-byte FIFO
+
 pub struct Sio {
     // Write registers
     wr: [u8; 6],        // WR0-WR5
@@ -24,9 +26,16 @@ pub struct Sio {
     // Receive FIFO — shared with reader thread
     rx_fifo: Arc<Mutex<VecDeque<u8>>>,
 
+    // Error flags (RR1 bits, latched until Error Reset command)
+    rx_overrun: bool,
+
     // Transmit state
     tx_ready_at: Instant,
     tx_file: Option<std::fs::File>,
+
+    // Serial device file descriptor for modem control ioctls
+    serial_fd: Option<i32>,
+    device_name: String,
 
     // 8116 baud rate generator
     baud_rate_code: u8,
@@ -41,8 +50,11 @@ impl Sio {
             wr: [0; 6],
             reg_pointer: 0,
             rx_fifo: Arc::new(Mutex::new(VecDeque::with_capacity(64))),
+            rx_overrun: false,
             tx_ready_at: Instant::now(),
             tx_file: None,
+            serial_fd: None,
+            device_name: String::new(),
             baud_rate_code: 0x0E, // Default 9600
             baud_rate: 9600,
             trace,
@@ -81,6 +93,12 @@ impl Sio {
             return Err("Failed to duplicate file descriptor".to_string());
         }
         let reader_file = unsafe { std::fs::File::from_raw_fd(reader_fd) };
+
+        self.serial_fd = Some(fd);
+        self.device_name = device_path.to_string();
+
+        // Set initial modem control lines (RTS + DTR asserted)
+        self.update_modem_signals();
 
         // Spawn background reader thread
         let rx_fifo = Arc::clone(&self.rx_fifo);
@@ -149,6 +167,7 @@ impl Sio {
                         }
                     }
                     6 => {  // Error Reset
+                        self.rx_overrun = false;
                         if self.trace {
                             println!("SIO A: Error Reset");
                         }
@@ -212,8 +231,22 @@ impl Sio {
                 }
             }
             5 => {
+                let old_wr5 = self.wr[5];
                 self.wr[5] = value;
                 self.reg_pointer = 0;
+
+                // Detect Send Break changes
+                let old_break = (old_wr5 >> 4) & 0x01;
+                let new_break = (value >> 4) & 0x01;
+                if new_break != old_break {
+                    self.handle_break(new_break != 0);
+                }
+
+                // Detect RTS/DTR changes
+                if (value ^ old_wr5) & 0x82 != 0 {
+                    self.update_modem_signals();
+                }
+
                 if self.trace {
                     let tx_bits = match (value >> 5) & 0x03 {
                         0 => 5, 1 => 7, 2 => 6, _ => 8,
@@ -273,6 +306,14 @@ impl Sio {
     /// Read from the data port (port 0x04). Receive a byte.
     pub fn read_data(&mut self) -> u8 {
         let value = if let Ok(mut fifo) = self.rx_fifo.lock() {
+            // Check for overrun: if FIFO exceeds hardware capacity,
+            // the newest byte overwrites the oldest (per SIO datasheet)
+            if fifo.len() > RX_FIFO_CAPACITY {
+                self.rx_overrun = true;
+                if self.trace {
+                    println!("SIO A: Rx overrun (FIFO len={})", fifo.len());
+                }
+            }
             fifo.pop_front().unwrap_or(0)
         } else {
             0
@@ -295,17 +336,23 @@ impl Sio {
         }
     }
 
-    pub fn get_baud_rate(&self) -> u32 {
-        self.baud_rate
-    }
-
     pub fn is_connected(&self) -> bool {
         self.tx_file.is_some()
+    }
+
+    /// Get a short status string for the F2 display.
+    pub fn status_string(&self) -> String {
+        if self.is_connected() {
+            format!("SIO:{} {}bd", self.device_name, self.baud_rate)
+        } else {
+            "SIO:---".to_string()
+        }
     }
 
     fn channel_reset(&mut self) {
         self.wr = [0; 6];
         self.reg_pointer = 0;
+        self.rx_overrun = false;
         if let Ok(mut fifo) = self.rx_fifo.lock() {
             fifo.clear();
         }
@@ -313,6 +360,58 @@ impl Sio {
         if self.trace {
             println!("SIO A: Channel Reset");
         }
+    }
+
+    /// Send or clear a break condition on the serial line.
+    fn handle_break(&mut self, send_break: bool) {
+        if let Some(fd) = self.serial_fd {
+            if send_break {
+                // tcsendbreak sends a break for a duration (0 = implementation-defined)
+                unsafe { libc::tcsendbreak(fd, 0); }
+                if self.trace {
+                    println!("SIO A: Send Break asserted");
+                }
+            } else {
+                if self.trace {
+                    println!("SIO A: Send Break cleared");
+                }
+            }
+        }
+    }
+
+    /// Update RTS and DTR modem control lines from WR5 state.
+    fn update_modem_signals(&self) {
+        if let Some(fd) = self.serial_fd {
+            let rts = (self.wr[5] >> 1) & 0x01 != 0;
+            let dtr = (self.wr[5] >> 7) & 0x01 != 0;
+
+            let mut bits: libc::c_int = 0;
+            if rts { bits |= libc::TIOCM_RTS; }
+            if dtr { bits |= libc::TIOCM_DTR; }
+
+            unsafe { libc::ioctl(fd, libc::TIOCMSET, &bits); }
+
+            if self.trace {
+                println!("SIO A: Modem signals RTS={} DTR={}", rts as u8, dtr as u8);
+            }
+        }
+    }
+
+    /// Read modem status lines (CTS, DCD) from the serial device.
+    /// Reserved for Phase 4 use with real serial hardware.
+    #[allow(dead_code)]
+    fn read_modem_signals(&self) -> (bool, bool) {
+        if let Some(fd) = self.serial_fd {
+            let mut bits: libc::c_int = 0;
+            let ret = unsafe { libc::ioctl(fd, libc::TIOCMGET, &mut bits) };
+            if ret == 0 {
+                let cts = bits & libc::TIOCM_CTS != 0;
+                let dcd = bits & libc::TIOCM_CD != 0;
+                return (cts, dcd);
+            }
+        }
+        // Default: both asserted (pty or no connection)
+        (true, true)
     }
 
     /// Build RR0 status register.
@@ -339,14 +438,13 @@ impl Sio {
             status |= 0x04;
         }
 
-        // D3: DCD — report carrier present when serial is connected
-        if self.tx_file.is_some() {
-            status |= 0x08;
-        }
-
-        // D5: CTS — report clear to send when serial is connected
-        if self.tx_file.is_some() {
-            status |= 0x20;
+        // D3: DCD, D5: CTS — default to asserted when connected.
+        // Real modem signal reading (read_modem_signals) is available but
+        // not called per-poll due to ioctl syscall overhead. Ptys don't
+        // have modem lines anyway; real serial hardware can enable this.
+        if self.is_connected() {
+            status |= 0x08; // DCD
+            status |= 0x20; // CTS
         }
 
         status
@@ -363,6 +461,11 @@ impl Sio {
         // D0: All Sent — true when Tx is idle
         if Instant::now() >= self.tx_ready_at {
             status |= 0x01;
+        }
+
+        // D5: Rx Overrun Error (latched, cleared by Error Reset command)
+        if self.rx_overrun {
+            status |= 0x20;
         }
 
         status

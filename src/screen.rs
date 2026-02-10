@@ -143,7 +143,9 @@ impl Screen {
         }
 
         if self.show_status {
-            println!("//====Last key: 0x{:02x}================================================================\\\\", machine.keyboard.peek_key());
+            let sio_status = machine.sio.status_string();
+            println!("//====Last key: 0x{:02x}=={:>40}==============\\\\",
+                machine.keyboard.peek_key(), sio_status);
         } else {
             println!("{}", self.format_title_line());
         }
