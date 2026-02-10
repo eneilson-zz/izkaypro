@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Z84C40 SIO Channel A emulation for Kaypro 4-84 serial port.
@@ -19,11 +21,12 @@ pub struct Sio {
     wr: [u8; 6],        // WR0-WR5
     reg_pointer: u8,    // Next register to write (from WR0 D2-D0)
 
-    // Receive FIFO (3-byte, matching real SIO hardware)
-    rx_fifo: VecDeque<u8>,
+    // Receive FIFO — shared with reader thread
+    rx_fifo: Arc<Mutex<VecDeque<u8>>>,
 
     // Transmit state
     tx_ready_at: Instant,
+    tx_file: Option<std::fs::File>,
 
     // 8116 baud rate generator
     baud_rate_code: u8,
@@ -37,12 +40,83 @@ impl Sio {
         Sio {
             wr: [0; 6],
             reg_pointer: 0,
-            rx_fifo: VecDeque::with_capacity(3),
+            rx_fifo: Arc::new(Mutex::new(VecDeque::with_capacity(64))),
             tx_ready_at: Instant::now(),
+            tx_file: None,
             baud_rate_code: 0x0E, // Default 9600
             baud_rate: 9600,
             trace,
         }
+    }
+
+    /// Open a serial device and start the background reader thread.
+    /// The device path can be a real serial port (/dev/ttyUSB0) or a
+    /// pty endpoint (/tmp/kayproA created by socat, etc.).
+    pub fn open_serial(&mut self, device_path: &str) -> Result<(), String> {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(device_path)
+            .map_err(|e| format!("Failed to open serial device '{}': {}", device_path, e))?;
+
+        let fd = file.as_raw_fd();
+
+        // Configure termios for raw mode (no echo, no buffering, no signal handling)
+        if let Ok(mut termios) = termios::Termios::from_fd(fd) {
+            termios.c_iflag &= !(termios::IXON | termios::IXOFF | termios::ICRNL
+                | termios::INLCR | termios::IGNCR | termios::ISTRIP | termios::BRKINT);
+            termios.c_oflag &= !termios::OPOST;
+            termios.c_lflag &= !(termios::ECHO | termios::ICANON | termios::ISIG | termios::IEXTEN);
+            termios.c_cflag |= termios::CS8 | termios::CREAD | termios::CLOCAL;
+            termios.c_cc[termios::VMIN] = 0;
+            termios.c_cc[termios::VTIME] = 1; // 100ms timeout for reads
+            let _ = termios::tcsetattr(fd, termios::TCSANOW, &termios);
+        }
+
+        // Clone the file descriptor for the reader thread
+        let reader_fd = unsafe { libc::dup(fd) };
+        if reader_fd < 0 {
+            return Err("Failed to duplicate file descriptor".to_string());
+        }
+        let reader_file = unsafe { std::fs::File::from_raw_fd(reader_fd) };
+
+        // Spawn background reader thread
+        let rx_fifo = Arc::clone(&self.rx_fifo);
+        let trace = self.trace;
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut reader = reader_file;
+            let mut buf = [0u8; 64];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Ok(n) => {
+                        if let Ok(mut fifo) = rx_fifo.lock() {
+                            for &byte in &buf[..n] {
+                                fifo.push_back(byte);
+                                if trace {
+                                    println!("SIO A: Serial Rx 0x{:02X} '{}'", byte,
+                                        if byte >= 0x20 && byte < 0x7F { byte as char } else { '.' });
+                                }
+                            }
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+
+        self.tx_file = Some(file);
+
+        if self.trace {
+            println!("SIO A: Opened serial device '{}'", device_path);
+        }
+        Ok(())
     }
 
     /// Write to the control port (port 0x06).
@@ -189,13 +263,21 @@ impl Sio {
         let char_time_us = self.character_time_us();
         self.tx_ready_at = Instant::now() + std::time::Duration::from_micros(char_time_us);
 
-        // Phase 2 will forward the byte to the host serial port here
+        // Forward byte to host serial port
+        if let Some(ref mut file) = self.tx_file {
+            let _ = file.write_all(&[value]);
+            let _ = file.flush();
+        }
     }
 
     /// Read from the data port (port 0x04). Receive a byte.
     pub fn read_data(&mut self) -> u8 {
-        let value = self.rx_fifo.pop_front().unwrap_or(0);
-        if self.trace {
+        let value = if let Ok(mut fifo) = self.rx_fifo.lock() {
+            fifo.pop_front().unwrap_or(0)
+        } else {
+            0
+        };
+        if self.trace && value != 0 {
             println!("SIO A: Rx 0x{:02X} '{}'", value,
                 if value >= 0x20 && value < 0x7F { value as char } else { '.' });
         }
@@ -217,10 +299,16 @@ impl Sio {
         self.baud_rate
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.tx_file.is_some()
+    }
+
     fn channel_reset(&mut self) {
         self.wr = [0; 6];
         self.reg_pointer = 0;
-        self.rx_fifo.clear();
+        if let Ok(mut fifo) = self.rx_fifo.lock() {
+            fifo.clear();
+        }
         self.tx_ready_at = Instant::now();
         if self.trace {
             println!("SIO A: Channel Reset");
@@ -240,8 +328,10 @@ impl Sio {
         let mut status: u8 = 0;
 
         // D0: Rx Char Available
-        if !self.rx_fifo.is_empty() {
-            status |= 0x01;
+        if let Ok(fifo) = self.rx_fifo.lock() {
+            if !fifo.is_empty() {
+                status |= 0x01;
+            }
         }
 
         // D2: Tx Buffer Empty (ready to accept data)
@@ -249,11 +339,15 @@ impl Sio {
             status |= 0x04;
         }
 
-        // D3: DCD — assume carrier present (no serial port connected yet)
-        status |= 0x08;
+        // D3: DCD — report carrier present when serial is connected
+        if self.tx_file.is_some() {
+            status |= 0x08;
+        }
 
-        // D5: CTS — assume clear to send (no serial port connected yet)
-        status |= 0x20;
+        // D5: CTS — report clear to send when serial is connected
+        if self.tx_file.is_some() {
+            status |= 0x20;
+        }
 
         status
     }

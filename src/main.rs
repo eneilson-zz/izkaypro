@@ -87,6 +87,10 @@ struct Cli {
     #[arg(long)]
     sio_trace: bool,
 
+    /// Connect SIO-1 Port A to a serial device (e.g., /dev/ttyUSB0, /tmp/kayproA)
+    #[arg(long, value_name = "DEVICE")]
+    serial: Option<String>,
+
     /// Enable all trace options
     #[arg(long)]
     trace_all: bool,
@@ -189,6 +193,14 @@ fn main() {
         results.push(diagnostics::test_attr_ram(&mut machine.crtc));
         diagnostics::print_results(&results);
         return;
+    }
+
+    // Open serial device if specified
+    if let Some(ref device) = cli.serial {
+        match machine.sio.open_serial(device) {
+            Ok(()) => println!("Serial port: {}", device),
+            Err(e) => eprintln!("Warning: {}", e),
+        }
     }
 
     // Start the cpu

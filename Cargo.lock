@@ -144,6 +144,7 @@ version = "0.9.0"
 dependencies = [
  "clap",
  "iz80",
+ "libc",
  "serde",
  "termios",
  "toml",
