@@ -8,6 +8,7 @@ mod floppy_controller;
 mod keyboard_unix;
 mod media;
 mod screen;
+mod rtc;
 mod sio;
 mod sy6545;
 mod diagnostics;
@@ -87,6 +88,10 @@ struct Cli {
     #[arg(long)]
     sio_trace: bool,
 
+    /// Trace MM58167A real-time clock register access
+    #[arg(long)]
+    rtc_trace: bool,
+
     /// Connect SIO-1 Port A to a serial device (e.g., /dev/ttyUSB0, /tmp/kayproA)
     #[arg(long, value_name = "DEVICE")]
     serial: Option<String>,
@@ -135,6 +140,7 @@ fn main() {
     let trace_bdos = cli.bdos_trace || cli.trace_all;
     let trace_crtc = cli.crtc_trace || cli.trace_all;
     let trace_sio = cli.sio_trace || cli.trace_all;
+    let trace_rtc = cli.rtc_trace || cli.trace_all;
     let run_diag = cli.diagnostics;
     let run_boot_test = cli.boot_test;
 
@@ -146,6 +152,7 @@ fn main() {
         || trace_bdos
         || trace_crtc
         || trace_sio
+        || trace_rtc
         || trace_system_bits;
 
     // Init device with configuration
@@ -166,6 +173,7 @@ fn main() {
         trace_system_bits,
         trace_crtc,
         trace_sio,
+        trace_rtc,
     );
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);

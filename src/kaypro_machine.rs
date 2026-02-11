@@ -4,6 +4,7 @@ use std::io::{Write};
 use iz80::Machine;
 use super::FloppyController;
 use super::keyboard_unix::Keyboard;
+use super::rtc::Rtc;
 use super::sio::Sio;
 use super::sy6545::Sy6545;
 
@@ -39,7 +40,7 @@ pub enum SystemBit {
     Bank = 0x80,
 }
 
-const IO_PORT_NAMES: [&str; 32] = [
+const IO_PORT_NAMES: [&str; 40] = [
     /* 0x00 */"Baud rate A, serial",
     /* 0x01 */"-",
     /* 0x02 */"-",
@@ -68,10 +69,18 @@ const IO_PORT_NAMES: [&str; 32] = [
     /* 0x19 */"-",
     /* 0x1a */"-",
     /* 0x1b */"-",
-    /* 0x1c */"PIO 2 channel A data register: ",
+    /* 0x1c */"PIO 2 channel A data register.",
     /* 0x1d */"PIO 2 channel A control register.",
     /* 0x1e */"PIO 2 channel B data register.",
     /* 0x1f */"PIO 2 channel B control register.",
+    /* 0x20 */"RTC PIO data (CLKADD).",
+    /* 0x21 */"RTC PIO channel B data.",
+    /* 0x22 */"RTC PIO control (CLKCTL).",
+    /* 0x23 */"RTC PIO channel B control.",
+    /* 0x24 */"RTC data (CLKDAT).",
+    /* 0x25 */"-",
+    /* 0x26 */"-",
+    /* 0x27 */"-",
     ];
 
 
@@ -102,6 +111,7 @@ pub struct KayproMachine {
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
     pub sio: Sio,
+    pub rtc: Rtc,
 }
 
 impl KayproMachine {
@@ -113,6 +123,7 @@ impl KayproMachine {
         trace_system_bits: bool,
         trace_crtc: bool,
         trace_sio: bool,
+        trace_rtc: bool,
     ) -> KayproMachine {
         // Load ROM from file, fall back to embedded if not found
         let rom_data = Self::load_rom_or_fallback(rom_path);
@@ -146,6 +157,7 @@ impl KayproMachine {
             keyboard: Keyboard::new(),
             floppy_controller,
             sio: Sio::new(trace_sio),
+            rtc: Rtc::new(trace_rtc),
         }
     }
     
@@ -431,7 +443,7 @@ impl Machine for KayproMachine {
 
     fn port_out(&mut self, address: u16, value: u8) {
 
-        let port = address as u8 & 0b_1001_1111; // Pins used
+        let port = address as u8 & 0b_1011_1111; // A7 enables decoder, A6 unused, A5 selects U26/U27
         if port >= 0x80 {
             // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {
@@ -440,7 +452,8 @@ impl Machine for KayproMachine {
             return
         }
 
-        if self.trace_io && port != 0x1c && port != 0x14 {
+        if self.trace_io && port != 0x1c && port != 0x14
+            && (port as usize) < IO_PORT_NAMES.len() {
             println!("OUT(0x{:02x} '{}', 0x{:02x}): ", port, IO_PORT_NAMES[port as usize], value);
         }
         match port {
@@ -499,13 +512,17 @@ impl Machine for KayproMachine {
                     self.crtc.write_port_1f(value);
                 }
             },
+            // RTC PIO and clock (Kaypro 4-84 only)
+            0x20 => self.rtc.write_addr(value),
+            0x22 => self.rtc.write_control(value),
+            0x24 => self.rtc.write_data(value),
             _ => {}
         } 
     }
 
     fn port_in(&mut self, address: u16) -> u8 {
-        let port = address as u8 & 0b_1001_1111; // Pins used
-        if port > 0x80 { // Pin 7 is tied to enable of the 3-8 decoder
+        let port = address as u8 & 0b_1011_1111; // A7 enables decoder, A6 unused, A5 selects U26/U27
+        if port >= 0x80 { // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {
                 println!("IN(0x{:02x} 'Ignored')", port);
             }
@@ -567,10 +584,14 @@ impl Machine for KayproMachine {
                     0xca
                 }
             },
+            // RTC PIO and clock (Kaypro 4-84 only)
+            0x20 => self.rtc.read_addr(),
+            0x24 => self.rtc.read_data(),
             _ => 0xca,
         }; 
 
-        if self.trace_io && port != 0x13 && port != 0x07 && port != 0x1c && port != 0x14 {
+        if self.trace_io && port != 0x13 && port != 0x07 && port != 0x1c && port != 0x14
+            && (port as usize) < IO_PORT_NAMES.len() {
             println!("IN(0x{:02x} '{}') = 0x{:02x}", port, IO_PORT_NAMES[port as usize], value);
         }
         value
