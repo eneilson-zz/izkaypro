@@ -166,6 +166,7 @@ impl Rtc {
         (ms, sec, min, hour, dow, day as u8, month as u8)
     }
 
+    #[allow(dead_code)]
     pub fn status_string(&self) -> String {
         let (_, sec, min, hour, _, day, month) = self.current_time();
         format!("RTC:{:02X}/{:02X} {:02X}:{:02X}:{:02X}",

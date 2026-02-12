@@ -62,7 +62,7 @@ impl Screen {
 
     pub fn init(&self) {
         if self.in_place {
-            for _ in 0..27 {
+            for _ in 0..28 {
                 println!();
             }
         }
@@ -123,9 +123,17 @@ impl Screen {
         }
         self.last_system_bits = relevant_system_bits;
 
+        // Determine display height for cursor positioning
+        let display_rows = if machine.video_mode == VideoMode::Sy6545Crtc {
+            machine.crtc.displayed_rows().clamp(24, 25)
+        } else {
+            24
+        };
+        let total_lines = display_rows + 2; // title + rows + footer
+
         // Move cursor up with ansi escape sequence
         if self.in_place {
-            print!("\x1b[{}A", 26);
+            print!("\x1b[{}A", total_lines);
         }
 
         let mut disk_status = "======".to_owned();
@@ -161,7 +169,7 @@ impl Screen {
         };
         
         // For CRTC mode, display uses linear 80-byte rows from start_addr
-        for row in 0..24 {
+        for row in 0..display_rows {
             print!("|| ");
             for col in 0..80 {
                 let (code, attr, is_cursor) = if machine.video_mode == VideoMode::Sy6545Crtc {

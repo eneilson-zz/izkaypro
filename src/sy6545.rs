@@ -323,6 +323,11 @@ impl Sy6545 {
         self.vram[(offset & 0x7FF) + 0x800] // Attribute plane
     }
     
+    /// Get number of displayed rows from R6
+    pub fn displayed_rows(&self) -> usize {
+        self.regs[6] as usize
+    }
+
     /// Get cursor address from R14:R15
     pub fn cursor_addr(&self) -> usize {
         ((self.regs[14] as usize) << 8) | (self.regs[15] as usize)

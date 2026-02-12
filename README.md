@@ -2,7 +2,7 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 27.
+This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 28.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
