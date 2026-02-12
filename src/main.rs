@@ -15,7 +15,7 @@ mod diagnostics;
 #[cfg(test)]
 mod format_test;
 
-use self::config::Config;
+use self::config::{Config, KayproModel};
 use self::kaypro_machine::KayproMachine;
 use self::floppy_controller::FloppyController;
 use self::screen::Screen;
@@ -175,6 +175,7 @@ fn main() {
         trace_sio,
         trace_rtc,
     );
+    machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);
 
@@ -242,6 +243,18 @@ fn main() {
         cpu.execute_instruction(&mut machine);
         counter += 1;
         cycle_count += CYCLES_PER_INSTRUCTION;
+
+        // KayPLUS software clock fixup: intercept the BIOS tick routine
+        // at 0x069E (start of the seconds/minutes/hours increment loop).
+        // Patch RAM counters with real RTC time and skip past the loop
+        // so the display code at 0x06CE reads accurate values.
+        if machine.kayplus_clock_fixup
+            && machine.is_rom_rank()
+            && cpu.registers().pc() == 0x069E
+        {
+            machine.patch_software_clock();
+            cpu.registers().set_pc(0x06CE);
+        }
 
         // Clock speed throttling
         if let Some(mhz) = clock_mhz {

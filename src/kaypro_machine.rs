@@ -1,6 +1,5 @@
 use std::fs::{File};
 use std::io::{Write};
-
 use iz80::Machine;
 use super::FloppyController;
 use super::keyboard_unix::Keyboard;
@@ -108,6 +107,8 @@ pub struct KayproMachine {
     pub trace_io: bool,
     trace_system_bits: bool,
 
+    pub kayplus_clock_fixup: bool,
+
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
     pub sio: Sio,
@@ -154,6 +155,7 @@ impl KayproMachine {
             sio_int_pending: false,
             trace_io,
             trace_system_bits,
+            kayplus_clock_fixup: false,
             keyboard: Keyboard::new(),
             floppy_controller,
             sio: Sio::new(trace_sio),
@@ -386,6 +388,18 @@ impl KayproMachine {
         let handler = handler_hi << 8 | handler_lo;
 
         Some(handler)
+    }
+
+    /// Patch the KayPLUS software clock counters (0xFF5C-0xFF5E) with
+    /// wall-clock time from the RTC. Called when PC reaches 0x069E
+    /// (the start of the clock increment loop in the KayPLUS BIOS tick
+    /// routine). The caller must then advance PC to 0x06CE to skip
+    /// the increment loop, so the display code reads the patched values.
+    pub fn patch_software_clock(&mut self) {
+        let (sec, min, hour) = self.rtc.current_time_hms();
+        self.ram[0xFF5E] = sec;
+        self.ram[0xFF5D] = min;
+        self.ram[0xFF5C] = hour;
     }
 
     pub fn save_bios(&self) -> Result<String, String> {

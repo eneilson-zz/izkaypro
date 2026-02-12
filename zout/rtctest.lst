@@ -1,0 +1,454 @@
+   1:				; RTCTEST.Z — CP/M program to test RTC interrupts on Kaypro 4-84
+   2:				;
+   3:				; Sets up IM2 with PIO vector, configures the MM58167A for 1/sec
+   4:				; interrupts, and displays updating date/time on the console.
+   5:				;
+   6:				; Assemble with zmac:
+   7:				;   zmac tools/rtctest.z
+   8:				;   cp zout/rtctest.cim disks/rtctest.com
+   9:				;
+  10:				
+  11:				; --- Constants ---
+  12:     -	0005          	BDOS		equ	0005h
+  13:     -	0002          	BDOS_COUT	equ	02h
+  14:     -	0009          	BDOS_PSTR	equ	09h
+  15:     -	000B          	BDOS_CSTAT	equ	0Bh
+  16:     -	0001          	BDOS_CIN	equ	01h
+  17:				
+  18:     -	0020          	PIO_VECTOR	equ	20h
+  19:     -	0004          	I_REG_VAL	equ	04h
+  20:     -	0400          	VEC_TABLE	equ	I_REG_VAL * 256		; 0400h
+  21:     -	0420          	VEC_ENTRY	equ	VEC_TABLE + PIO_VECTOR	; 0420h
+  22:				
+  23:     -	0020          	PORT_CLKADD	equ	20h
+  24:     -	0022          	PORT_CLKCTL	equ	22h
+  25:     -	0024          	PORT_CLKDAT	equ	24h
+  26:				
+  27:     -	0100          		org	0100h
+  28:				
+  29:				; --- Entry point ---
+  30:    0+10	0100  C3C202  		jp	main
+  31:				
+  32:				; --- Variables (jumped over, never executed) ---
+  33:     -	0103  00      	flag:		db	0
+  34:     -	0104  0000    	tick_count:	dw	0
+  35:				
+  36:				; --- Strings ---
+  37:     -	0106          	str_title:
+  38:     -	0106  1B3D2020		db	1Bh,'=',' ',' '		; ADM-3A cursor home
+  39:     -	010A  52544320		db	'RTC Interrupt Clock Test',0Dh,0Ah
+	              496E7465
+	              72727570
+	              7420436C
+	              6F636B20
+	              54657374
+	              0D0A
+  40:     -	0124  3D3D3D3D		db	'========================',0Dh,0Ah,0Dh,0Ah,'$'
+	              3D3D3D3D
+	              3D3D3D3D
+	              3D3D3D3D
+	              3D3D3D3D
+	              3D3D3D3D
+	              0D0A0D0A
+	              24
+  41:				
+  42:     -	0141          	str_reading:
+  43:     -	0141  52656164		db	'Reading RTC directly:  $'
+	              696E6720
+	              52544320
+	              64697265
+	              63746C79
+	              3A202024
+  44:				
+  45:     -	0159          	str_setup:
+  46:     -	0159  0D0A0D0A		db	0Dh,0Ah,0Dh,0Ah
+  47:     -	015D  53657474		db	'Setting up IM2 + PIO + RTC 1/sec interrupt...',0Dh,0Ah,'$'
+	              696E6720
+	              75702049
+	              4D32202B
+	              2050494F
+	              202B2052
+	              54432031
+	              2F736563
+	              20696E74
+	              65727275
+	              70742E2E
+	              2E0D0A24
+  48:				
+  49:     -	018D          	str_done:
+  50:     -	018D  446F6E65		db	'Done. Waiting for ticks.',0Dh,0Ah,0Dh,0Ah,'$'
+	              2E205761
+	              6974696E
+	              6720666F
+	              72207469
+	              636B732E
+	              0D0A0D0A
+	              24
+  51:				
+  52:     -	01AA          	str_exit:
+  53:     -	01AA  0D0A0D0A		db	0Dh,0Ah,0Dh,0Ah
+  54:     -	01AE  44697361		db	'Disabling interrupts, exiting.',0Dh,0Ah,'$'
+	              626C696E
+	              6720696E
+	              74657272
+	              75707473
+	              2C206578
+	              6974696E
+	              672E0D0A
+	              24
+  55:				
+  56:     -	01CF          	str_tick:
+  57:     -	01CF  0D202054		db	0Dh,'  Tick $'
+	              69636B20
+	              24
+  58:				
+  59:     -	01D8          	str_date:
+  60:     -	01D8  20202044		db	'   Date: $'
+	              6174653A
+	              2024
+  61:				
+  62:     -	01E2          	str_time:
+  63:     -	01E2  20205469		db	'  Time: $'
+	              6D653A20
+	              24
+  64:				
+  65:     -	01EB          	str_slash:
+  66:     -	01EB  2F24    		db	'/$'
+  67:				
+  68:     -	01ED          	str_colon:
+  69:     -	01ED  3A24    		db	':$'
+  70:				
+  71:     -	01EF          	str_press:
+  72:     -	01EF  50726573		db	'Press any key to exit.',0Dh,0Ah,0Dh,0Ah,'$'
+	              7320616E
+	              79206B65
+	              7920746F
+	              20657869
+	              742E0D0A
+	              0D0A24
+  73:				
+  74:				
+  75:				; =========================================================
+  76:				; Subroutines
+  77:				; =========================================================
+  78:				
+  79:				; --- print_str: DE = $ terminated string, calls BDOS 9 ---
+  80:     -	020A          	print_str:
+  81:   10+7	020A  0E09    		ld	c,BDOS_PSTR
+  82:   17+17	020C  CD0500  		call	BDOS
+  83:   34+10	020F  C9      		ret
+  84:				
+  85:				; --- print_bcd: A = BCD byte, prints two ASCII digits ---
+  86:     -	0210          	print_bcd:
+  87:   44+11	0210  F5      		push	af
+  88:   55+4	0211  0F      		rrca
+  89:   59+4	0212  0F      		rrca
+  90:   63+4	0213  0F      		rrca
+  91:   67+4	0214  0F      		rrca
+  92:   71+7	0215  E60F    		and	0Fh
+  93:   78+7	0217  C630    		add	a,'0'
+  94:   85+4	0219  5F      		ld	e,a
+  95:   89+7	021A  0E02    		ld	c,BDOS_COUT
+  96:   96+17	021C  CD0500  		call	BDOS
+  97:  113+10	021F  F1      		pop	af
+  98:  123+7	0220  E60F    		and	0Fh
+  99:  130+7	0222  C630    		add	a,'0'
+ 100:  137+4	0224  5F      		ld	e,a
+ 101:  141+7	0225  0E02    		ld	c,BDOS_COUT
+ 102:  148+17	0227  CD0500  		call	BDOS
+ 103:  165+10	022A  C9      		ret
+ 104:				
+ 105:				; --- print_dec16: HL = 16-bit value, prints as decimal ---
+ 106:     -	022B          	print_dec16:
+ 107:  175+10	022B  011027  		ld	bc,10000
+ 108:  185+17	022E  CD4D02  		call	print_digit
+ 109:  202+10	0231  01E803  		ld	bc,1000
+ 110:  212+17	0234  CD4D02  		call	print_digit
+ 111:  229+10	0237  016400  		ld	bc,100
+ 112:  239+17	023A  CD4D02  		call	print_digit
+ 113:  256+10	023D  010A00  		ld	bc,10
+ 114:  266+17	0240  CD4D02  		call	print_digit
+ 115:  283+4	0243  7D      		ld	a,l
+ 116:  287+7	0244  C630    		add	a,'0'
+ 117:  294+4	0246  5F      		ld	e,a
+ 118:  298+7	0247  0E02    		ld	c,BDOS_COUT
+ 119:  305+17	0249  CD0500  		call	BDOS
+ 120:  322+10	024C  C9      		ret
+ 121:				
+ 122:     -	024D          	print_digit:
+ 123:  332+7	024D  3E2F    		ld	a,'0'-1
+ 124:     -	024F          	.loop:
+ 125:  339+4	024F  3C      		inc	a
+ 126:  343+4	0250  B7      		or	a			; clear carry
+ 127:  347+15	0251  ED42    		sbc	hl,bc
+ 128:  362+7+5	0253  30FA    		jr	nc,.loop
+ 129:  369+11	0255  09      		add	hl,bc
+ 130:  380+4	0256  5F      		ld	e,a
+ 131:  384+7	0257  0E02    		ld	c,BDOS_COUT
+ 132:  391+17	0259  CD0500  		call	BDOS
+ 133:  408+10	025C  C9      		ret
+ 134:				
+ 135:				; --- read_rtc_reg: A = register number, returns A = BCD value ---
+ 136:     -	025D          	read_rtc_reg:
+ 137:  418+11	025D  D320    		out	(PORT_CLKADD),a
+ 138:  429+11	025F  DB24    		in	a,(PORT_CLKDAT)
+ 139:  440+10	0261  C9      		ret
+ 140:				
+ 141:				; --- display_datetime: reads and prints MM/DD  HH:MM:SS ---
+ 142:     -	0262          	display_datetime:
+ 143:  450+10	0262  11D801  		ld	de,str_date
+ 144:  460+17	0265  CD0A02  		call	print_str
+ 145:				
+ 146:  477+7	0268  3E07    		ld	a,07h			; month
+ 147:  484+17	026A  CD5D02  		call	read_rtc_reg
+ 148:  501+17	026D  CD1002  		call	print_bcd
+ 149:				
+ 150:  518+10	0270  11EB01  		ld	de,str_slash
+ 151:  528+17	0273  CD0A02  		call	print_str
+ 152:				
+ 153:  545+7	0276  3E06    		ld	a,06h			; day
+ 154:  552+17	0278  CD5D02  		call	read_rtc_reg
+ 155:  569+17	027B  CD1002  		call	print_bcd
+ 156:				
+ 157:  586+10	027E  11E201  		ld	de,str_time
+ 158:  596+17	0281  CD0A02  		call	print_str
+ 159:				
+ 160:  613+7	0284  3E04    		ld	a,04h			; hours
+ 161:  620+17	0286  CD5D02  		call	read_rtc_reg
+ 162:  637+17	0289  CD1002  		call	print_bcd
+ 163:				
+ 164:  654+10	028C  11ED01  		ld	de,str_colon
+ 165:  664+17	028F  CD0A02  		call	print_str
+ 166:				
+ 167:  681+7	0292  3E03    		ld	a,03h			; minutes
+ 168:  688+17	0294  CD5D02  		call	read_rtc_reg
+ 169:  705+17	0297  CD1002  		call	print_bcd
+ 170:				
+ 171:  722+10	029A  11ED01  		ld	de,str_colon
+ 172:  732+17	029D  CD0A02  		call	print_str
+ 173:				
+ 174:  749+7	02A0  3E02    		ld	a,02h			; seconds
+ 175:  756+17	02A2  CD5D02  		call	read_rtc_reg
+ 176:  773+17	02A5  CD1002  		call	print_bcd
+ 177:				
+ 178:  790+10	02A8  C9      		ret
+ 179:				
+ 180:				
+ 181:				; =========================================================
+ 182:				; Interrupt Service Routine
+ 183:				; =========================================================
+ 184:				
+ 185:     -	02A9          	isr:
+ 186:  800+11	02A9  F5      		push	af
+ 187:  811+11	02AA  E5      		push	hl
+ 188:				
+ 189:					; Acknowledge interrupt: read status register to clear it
+ 190:  822+7	02AB  3E10    		ld	a,10h			; interrupt status register
+ 191:  829+11	02AD  D320    		out	(PORT_CLKADD),a
+ 192:  840+11	02AF  DB24    		in	a,(PORT_CLKDAT)		; read clears interrupt
+ 193:				
+ 194:					; Set flag for main loop
+ 195:  851+7	02B1  3E01    		ld	a,1
+ 196:  858+13	02B3  320301  		ld	(flag),a
+ 197:				
+ 198:					; Increment 16-bit tick counter
+ 199:  871+16	02B6  2A0401  		ld	hl,(tick_count)
+ 200:  887+6	02B9  23      		inc	hl
+ 201:  893+16	02BA  220401  		ld	(tick_count),hl
+ 202:				
+ 203:  909+10	02BD  E1      		pop	hl
+ 204:  919+10	02BE  F1      		pop	af
+ 205:  929+4	02BF  FB      		ei
+ 206:  933+14	02C0  ED4D    		reti
+ 207:				
+ 208:				
+ 209:				; =========================================================
+ 210:				; Main Program
+ 211:				; =========================================================
+ 212:				
+ 213:     -	02C2          	main:
+ 214:					; Print title (clears screen via cursor home)
+ 215:  947+10	02C2  110601  		ld	de,str_title
+ 216:  957+17	02C5  CD0A02  		call	print_str
+ 217:				
+ 218:					; Show direct RTC read
+ 219:  974+10	02C8  114101  		ld	de,str_reading
+ 220:  984+17	02CB  CD0A02  		call	print_str
+ 221: 1001+17	02CE  CD6202  		call	display_datetime
+ 222:				
+ 223:					; Print setup message
+ 224: 1018+10	02D1  115901  		ld	de,str_setup
+ 225: 1028+17	02D4  CD0A02  		call	print_str
+ 226:				
+ 227:					; --- Set up IM2 interrupt ---
+ 228: 1045+4	02D7  F3      		di
+ 229:				
+ 230:					; Set I register
+ 231: 1049+7	02D8  3E04    		ld	a,I_REG_VAL
+ 232: 1056+9	02DA  ED47    		ld	i,a
+ 233:				
+ 234:					; Switch to IM 2
+ 235: 1065+8	02DC  ED5E    		im	2
+ 236:				
+ 237:					; Store ISR address in vector table
+ 238: 1073+10	02DE  21A902  		ld	hl,isr
+ 239: 1083+16	02E1  222004  		ld	(VEC_ENTRY),hl
+ 240:				
+ 241:					; Configure PIO Port A for interrupts
+ 242: 1099+7	02E4  3E20    		ld	a,PIO_VECTOR		; interrupt vector
+ 243: 1106+11	02E6  D322    		out	(PORT_CLKCTL),a
+ 244: 1117+7	02E8  3ECF    		ld	a,0CFh			; mode 3
+ 245: 1124+11	02EA  D322    		out	(PORT_CLKCTL),a
+ 246: 1135+7	02EC  3EE0    		ld	a,0E0h			; I/O mask
+ 247: 1142+11	02EE  D322    		out	(PORT_CLKCTL),a
+ 248: 1153+7	02F0  3E37    		ld	a,37h			; int control: active high, OR, mask follows
+ 249: 1160+11	02F2  D322    		out	(PORT_CLKCTL),a
+ 250: 1171+7	02F4  3EBF    		ld	a,0BFh			; int mask: monitor bit 6
+ 251: 1178+11	02F6  D322    		out	(PORT_CLKCTL),a
+ 252:				
+ 253:					; Configure RTC: enable 1/sec interrupt
+ 254: 1189+7	02F8  3E11    		ld	a,11h			; interrupt control register
+ 255: 1196+11	02FA  D320    		out	(PORT_CLKADD),a
+ 256: 1207+7	02FC  3E04    		ld	a,04h			; 1/sec interrupt
+ 257: 1214+11	02FE  D324    		out	(PORT_CLKDAT),a
+ 258:				
+ 259:					; Clear any pending interrupt status
+ 260: 1225+7	0300  3E10    		ld	a,10h			; interrupt status register
+ 261: 1232+11	0302  D320    		out	(PORT_CLKADD),a
+ 262: 1243+11	0304  DB24    		in	a,(PORT_CLKDAT)		; read clears status
+ 263:				
+ 264:					; Enable PIO interrupts
+ 265: 1254+7	0306  3E83    		ld	a,83h			; interrupt enable
+ 266: 1261+11	0308  D322    		out	(PORT_CLKCTL),a
+ 267:				
+ 268:					; Enable CPU interrupts
+ 269: 1272+4	030A  FB      		ei
+ 270:				
+ 271:					; Print ready messages
+ 272: 1276+10	030B  118D01  		ld	de,str_done
+ 273: 1286+17	030E  CD0A02  		call	print_str
+ 274: 1303+10	0311  11EF01  		ld	de,str_press
+ 275: 1313+17	0314  CD0A02  		call	print_str
+ 276:				
+ 277:				; --- Main loop ---
+ 278:     -	0317          	main_loop:
+ 279:					; Check for keypress
+ 280: 1330+7	0317  0E0B    		ld	c,BDOS_CSTAT
+ 281: 1337+17	0319  CD0500  		call	BDOS
+ 282: 1354+4	031C  B7      		or	a
+ 283: 1358+7+5	031D  201B    		jr	nz,exit
+ 284:				
+ 285:					; Check interrupt flag
+ 286: 1365+13	031F  3A0301  		ld	a,(flag)
+ 287: 1378+4	0322  B7      		or	a
+ 288: 1382+7+5	0323  28F2    		jr	z,main_loop
+ 289:				
+ 290:					; Clear flag
+ 291: 1389+4	0325  AF      		xor	a
+ 292: 1393+13	0326  320301  		ld	(flag),a
+ 293:				
+ 294:					; Print tick count
+ 295: 1406+10	0329  11CF01  		ld	de,str_tick
+ 296: 1416+17	032C  CD0A02  		call	print_str
+ 297: 1433+16	032F  2A0401  		ld	hl,(tick_count)
+ 298: 1449+17	0332  CD2B02  		call	print_dec16
+ 299:				
+ 300:					; Display date/time
+ 301: 1466+17	0335  CD6202  		call	display_datetime
+ 302:				
+ 303: 1483+12	0338  18DD    		jr	main_loop
+ 304:				
+ 305:				; --- Exit ---
+ 306:     -	033A          	exit:
+ 307: 1495+4	033A  F3      		di
+ 308:				
+ 309:					; Disable RTC interrupts
+ 310: 1499+7	033B  3E11    		ld	a,11h
+ 311: 1506+11	033D  D320    		out	(PORT_CLKADD),a
+ 312: 1517+7	033F  3E00    		ld	a,00h
+ 313: 1524+11	0341  D324    		out	(PORT_CLKDAT),a
+ 314:				
+ 315:					; Disable PIO interrupts
+ 316: 1535+7	0343  3E03    		ld	a,03h
+ 317: 1542+11	0345  D322    		out	(PORT_CLKCTL),a
+ 318:				
+ 319:					; Restore IM 1
+ 320: 1553+8	0347  ED56    		im	1
+ 321: 1561+4	0349  FB      		ei
+ 322:				
+ 323:					; Consume the keypress
+ 324: 1565+7	034A  0E01    		ld	c,BDOS_CIN
+ 325: 1572+17	034C  CD0500  		call	BDOS
+ 326:				
+ 327:					; Print exit message
+ 328: 1589+10	034F  11AA01  		ld	de,str_exit
+ 329: 1599+17	0352  CD0A02  		call	print_str
+ 330:				
+ 331:					; Warm boot
+ 332: 1616+10	0355  C30000  		jp	0000h
+ 333:				
+ 334:				
+ 335:				; =========================================================
+ 336:				; Pad to vector table and reserve space for it
+ 337:				; =========================================================
+ 338:				
+ 339:					; Pad to vector table boundary
+ 340:     -	0000          	 if $ > VEC_TABLE
+ 342:				 endif
+ 343:				
+ 344:     -	0400          		org	VEC_TABLE
+ 345:     -	0400          	vector_table:
+ 346:     -	0400 ..04FF 00		ds	256,0			; 256 bytes of vector table
+ 347:				
+ 348:     -	0500          		end
+
+
+
+Statistics:
+
+     4	passes
+     0	jr promotions
+    37	symbols
+   856	bytes
+
+
+
+Symbol Table:
+
+.loop            24F      591
+BDOS           =05        5
+BDOS_CIN       =01        1
+BDOS_COUT      =02        2
+BDOS_CSTAT     =0B        11
+BDOS_PSTR      =09        9
+I_REG_VAL      =04        4
+PIO_VECTOR     =20        32
+PORT_CLKADD    =20        32
+PORT_CLKCTL    =22        34
+PORT_CLKDAT    =24        36
+VEC_ENTRY      = 420      1056
+VEC_TABLE      = 400      1024
+display_datetime  262      610
+exit             33A      826
+flag             103      259
+isr              2A9      681
+main             2C2      706
+main_loop        317      791
+print_bcd        210      528
+print_dec16      22B      555
+print_digit      24D      589
+print_str        20A      522
+read_rtc_reg     25D      605
+str_colon        1ED      493
+str_date         1D8      472
+str_done         18D      397
+str_exit         1AA      426
+str_press        1EF      495
+str_reading      141      321
+str_setup        159      345
+str_slash        1EB      491
+str_tick         1CF      463
+str_time         1E2      482
+str_title        106      262
+tick_count       104      260
+vector_table     400      1024

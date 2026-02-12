@@ -166,6 +166,12 @@ impl Rtc {
         (ms, sec, min, hour, dow, day as u8, month as u8)
     }
 
+    /// Get current time as binary (sec, min, hour) for software clock sync.
+    pub fn current_time_hms(&self) -> (u8, u8, u8) {
+        let (_, sec, min, hour, _, _, _) = self.current_time();
+        (sec, min, hour)
+    }
+
     #[allow(dead_code)]
     pub fn status_string(&self) -> String {
         let (_, sec, min, hour, _, day, month) = self.current_time();
