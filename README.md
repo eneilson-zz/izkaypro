@@ -1,8 +1,12 @@
 # Kaypro emulator on the terminal
 
+[![Latest Release](https://img.shields.io/github/v/tag/eneilson-zz/izkaypro?label=release&sort=semver)](https://github.com/eneilson-zz/izkaypro/releases)
+
 ## What is this?
 
 This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 28.
+
+This is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
 
 Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
 
@@ -16,9 +20,9 @@ It's a typical CP/M computer of the early 80s, built on a metal case with standa
 - 64 KB of main RAM
 - 2 - 8 KB of ROM
 - 2 - 4 KB of video RAM
-- 80*24 text mode (no graphics capabilities)
+- 80*24 text mode (no graphics capabilities) with a 25th line for status displays, such as clock
 - Two single or double side double density drives with 200kb/400kb capacity
-- One or more serial ports (not emulated by izkaypro)
+- One or more serial ports (SIO-1, Channel A is emulated for serial port connections on K4-84 models)
 - One parallel port (not emulated by izkaypro)
 
 ## Supported Models
@@ -65,142 +69,74 @@ From the main directory:
 
 ## Usage examples
 
-izkaypro does not require installation, you just need the executable. It has the ROM embedded as well as the boot CP/M disk and a blank disk. You can provide additional disk images as separate files.
+izkaypro does not require installation, you just need the executable. It has the default ROM embedded as well as the boot CP/M disk and a blank disk. You can provide additional disk images as separate files.
 
-### Usage with no arguments
-Run the executable on a terminal and type the CP/M commands (you can try DIR and changing drives with B:). Press F4 to exit back to the host shell prompt.
+Run using internal defaults (currently set to the Kaypro 4-84 machine)
+- ./target/release/izkaypro
 
-<pre style="background:#0a0a0a; color:#20BE55; font-family:'Terminus',monospace; padding:16px; border-radius:8px; overflow-x:auto; line-height:1.3;">
-Emulation of the Kaypro 4-84 computer
+Run using a different machine and disk images
+- ./target/release/izkaypro --model=turbo_rom --driveb=./disks/games/Games.img
 
-/===================================Kaypro 4-84=====================================\
-||                                                                                  ||
-|| KAYPRO 63K CP/M Version 2.2G                                                     ||
-||                                                                                  ||
-|| A0&gt;dir                                                                           ||
-|| A: ASM      COM : CONFIG   COM : COPY     COM : D        COM                     ||
-|| A: DDT      COM : DISK7    COM : LOAD     COM : MAKE     COM                     ||
-|| A: MFDISK   COM : MOVCPM   COM : PIP      COM : STAT     COM                     ||
-|| A: SUBMIT   COM : SYSGEN   COM : TERM     COM : VERIFY   COM                     ||
-|| A: VERIFY   DOC : VIEW     COM : XSUB     COM : BAUDM    COM                     ||
-|| A: BAUDP    COM : CLS      COM : DUMP     COM : ED       COM                     ||
-|| A: KAYPRO   DOC : ST       COM : STD      COM : COMPARE  COM                     ||
-|| A: DSKPRAM  COM : DU-V78   COM : EDFILE   COM : EDIT     COM                     ||
-|| A: FBAD57   COM : PROBE    COM : RAMMAP   COM : UNERA    COM                     ||
-|| A: LASM     COM : LSWEEP   COM : MLOAD    COM : UNCR     COM                     ||
-|| A: MBASIC   COM : OBASIC   COM : KAYCLK   COM : COPYSS   COM                     ||
-|| A: ACCESS   COM                                                                  ||
-|| A0&gt;                                                                              ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-\================================================ F1 for help ==== F4 to exit =====//
-</pre>
+Run connecting to a serial device
+- ./target/release/izkapro --serial=/dev/tty.usbserial-A60288TV --driveb=./disks/comm/k4-84-qterm.img
+
+### What the emulator looks like
+By default, the emulator boots a Kaypro 4-84 machine with the CP/M 2.2g boot disk in drive A and a blank boot disk in drive B. You can type DIR to see a directory listing and B: to change drives. 
+
+![Kaypro 4-84 Screen](doc/kaypro_4-84_screen.jpg)
 
 ### Usage with external images
-You can provide up two disk images as binary files to use as A: and B: drives. If only an image is provided, it will be the A: disk, B: will be a blank disk.
+The ./disks/ directory contains a number of Kaypro disk images to try. When starting the emulator, you can provide disk images on the command with the --drivea=path.to.disk.image or --driveb=path.to.disk.image parameters.
 
-If using the Kaypro II configuration, the images have to be raw binary images of single sided disks. The size must be 204800 bytes. See [disk images](doc/disk_images.md).
+While using the emulator, press F5 or F6 to insert a new disk into drives A or B respectively (Note: CP/M likes to have the boot disk stay in drive A).  Press F4 to exit back to the host shell prompt.
+
+If using the Kaypro II configuration, the images have to be raw binary images of single-sided, double-density disks. The size must be 204800 bytes. See [disk images](doc/disk_images.md).
 
 If using the Kaypro IV, 4-84, or 4-84 TurboROM/KayPLUS configurations, images can be either SSDD or DSDD disk images. Sample images of both sizes are provided in the disks directory. If you swap disks, some BIOS versions require you to warm boot (Ctrl-C) in order to re-load the new disk so that the BIOS will properly detect SSDD or DSDD format.
 
 Note: KayPLUS-formatted disks use sector IDs 0-9 on both sides (side selected via port 0x14 bit 2), unlike standard Kaypro DSDD disks which use sector IDs 10-19 on side 1. The `kayplus_84` model preset handles this automatically.
 
-<pre style="background:#0a0a0a; color:#20BE55; font-family:'Terminus',monospace; padding:16px; border-radius:8px; overflow-x:auto; line-height:1.3;">
-Emulation of the Kaypro II computer
+![Kaypro II Screen](doc/kaypro_ii_screen.jpg)
 
-//==================================================================================\
-||                                                                                  ||
-|| CP/Mish 2.2r0 for Kaypro II                                                      ||
-||                                                                                  ||
-|| A&gt;dir                                                                            ||
-|| COPY    .COM  |  DUMP    .COM  |  ASM     .COM  |  STAT    .COM                  ||
-|| BBCBASIC.COM  |  SUBMIT  .COM  |  QE      .COM                                   ||
-|| A&gt;dir b:                                                                         ||
-|| WS      .COM  |  WSOVLY1 .OVR  |  WSMSGS  .OVR  |  WS      .INS                  ||
-|| WINSTALL.COM  |  PRINT   .TST                                                    ||
-|| A&gt;stat                                                                           ||
-|| A: R/W, space: 135/195kB                                                         ||
-|| B: R/W, space: 27/195kB                                                          ||
-||                                                                                  ||
-|| A&gt;bbcbasic                                                                       ||
-|| BBC BASIC (Z80) Version 3.00+1                                                   ||
-|| (C) Copyright R.T.Russell 1987                                                   ||
-|| &gt;PRINT "Hi!"                                                                     ||
-|| Hi!                                                                              ||
-|| &gt;*BYE                                                                            ||
-||                                                                                  ||
-|| A&gt;_                                                                              ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-\================================================= F1 for help ==== F4 to exit ====//
-</pre>
-
-### Online help
+### In-Program help
 Press F1 to get additional help:
 
-<pre style="background:#0a0a0a; color:#20BE55; font-family:'Terminus',monospace; padding:16px; border-radius:8px; overflow-x:auto; line-height:1.3;">
-//==================================================================================\
-||                                                                                  ||
-|| KAYPRO II 64k CP/M vers 2.2                                                      ||
-||                                                                                  ||
-|| A&gt;_                                                                              ||
-||        +----------------------------------------------------------------+        ||
-||        |  izkaypro: Kaypro II emulator for console terminals            |        ||
-||        |----------------------------------------------------------------|        ||
-||        |  F1: Show/hide help           | Host keys to Kaypro keys:      |        ||
-||        |  F2: Show/hide disk status    |  Delete to DEL                 |        ||
-||        |  F4: Quit the emulator        |  Insert to LINEFEED            |        ||
-||        |  F5: Select file for drive A: |                                |        ||
-||        |  F6: Select file for drive B: |                                |        ||
-||        |  F7: Save BIOS to file        |                                |        ||
-||        |  F8: Toggle CPU trace         |                                |        ||
-||        |  F9: Set CPU speed (MHz)      |                                |        ||
-||        +----------------------------------------------------------------+        ||
-||        |  Loaded images:                                                |        ||
-||        |  A: CPM/2.2 embedded (transient)                               |        ||
-||        |  B: Blank disk embedded (transient)                            |        ||
-||        +----------------------------------------------------------------+        ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-||                                                                                  ||
-\================================================= F1 for help ==== F4 to exit ====//
-</pre>
+![Kaypro Help Screen](doc/kaypro_help_screen.jpg)
 
 ## Build from source
 
-To build from source, install the latest Rust compiler, clone the repo and run `cargo rust --release`. To build and run directly execute `cargo run`.
+To build from source, install the latest Rust compiler, clone the repo and run `cargo build --release`. To build and run directly execute `cargo run`.
 
 ## Command line usage
 ```
-USAGE:
-    izkaypro [FLAGS] [ARGS]
+izkaypro [OPTIONS]
 
-FLAGS:
-    -b, --bdos-trace     Traces calls to the CP/M BDOS entrypoints
-    -c, --cpu-trace      Traces CPU instructions execuions
-    -v, --crtc-trace     Traces SY6545 CRTC VRAM writes
-    -d, --diagnostics    Run ROM and RAM diagnostics then exit
-        --boot-test      Run headless boot tests for all models then exit
-    -f, --fdc-trace      Traces access to the floppy disk controller
-    -w, --fdc-trace-rw   Traces RW access to the floppy disk controller
-    -h, --help           Prints help information
-    -i, --io-trace       Traces ports IN and OUT
-    -r, --rom-trace      Traces calls to the ROM entrypoints
-    -s, --system-bits    Traces changes to the system bits values
-    -V, --version        Prints version information
+OPTIONS:
+    -m, --model <MODEL>      Kaypro model preset
+                             [models: kaypro_ii, kaypro4_83, kaypro4_84,
+                              turbo_rom, kayplus_84, custom]
+    -a, --drivea <FILE>      Disk image file for drive A
+    -b, --driveb <FILE>      Disk image file for drive B
+        --rom <FILE>         Custom ROM file (implies --model=custom)
+        --speed <MHZ>        CPU clock speed in MHz (1-100, default: unlimited)
+        --serial <DEVICE>    Connect SIO-1 Port A to a serial device
+    -d, --diagnostics        Run ROM and RAM diagnostics then exit
+        --boot-test          Run headless boot tests for all models then exit
+    -h, --help               Print help information
+    -V, --version            Print version information
 
-ARGS:
-    <DISKA>    Disk A: image file. Empty or $ to use config default
-    <DISKB>    Disk B: image file. Empty to use config default
+TRACE OPTIONS:
+    -c, --cpu-trace          Trace CPU instruction execution
+    -i, --io-trace           Trace I/O port access
+    -f, --fdc-trace          Trace floppy disk controller commands
+    -w, --fdc-trace-rw       Trace floppy disk controller read/write data
+    -s, --system-bits        Trace system bit changes
+    -r, --rom-trace          Trace ROM entry point calls
+        --bdos-trace         Trace CP/M BDOS calls
+    -v, --crtc-trace         Trace SY6545 CRTC VRAM writes
+        --sio-trace          Trace SIO-1 Channel A serial port
+        --rtc-trace          Trace MM58167A real-time clock register access
+        --trace-all          Enable all trace options
 ```
 
 ## Resources

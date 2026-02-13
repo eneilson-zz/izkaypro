@@ -20,7 +20,88 @@ li { margin: 5px 0; }
 
 <h1>Major Changes Since Original Checkout (v0.1.1)</h1>
 
-<h2>New Features</h2>
+<h2>Recent Changes (v0.9.x)</h2>
+
+<h3>KayPLUS 84 ROM Support</h3>
+<ul>
+<li>Full support for the KayPLUS replacement BIOS on Kaypro 4/84</li>
+<li>New <code>kayplus_84</code> model preset with KayPLUS-formatted disks (sector IDs 0-9 on both sides)</li>
+<li>Software clock fixup: intercepts BIOS tick routine and patches RAM counters with real wall-clock time from the RTC emulation</li>
+<li>KayPLUS boot disk shipped with screen dump hotkey remapped to CTRL-] (avoids conflict with QTerm)</li>
+</ul>
+
+<h3>SIO-1 Port A Serial Emulation</h3>
+<ul>
+<li>Z84C40 SIO Channel A emulation for serial communication on Kaypro 4-84 variants</li>
+<li>Host serial port connection via <code>--serial</code> flag (real ports or socat ptys)</li>
+<li>8116 Baud Rate Generator emulation (300-19200 baud)</li>
+<li>Modem signal support (RTS, DTR, CTS, DCD) via <code>TIOCMSET</code> ioctl</li>
+<li>Tx timing model for accurate character pacing</li>
+<li>TurboROM compatibility: ports 0x00 and 0x04 gated to RAM mode only to prevent BIOS interference</li>
+<li>Tested with QTerm: bidirectional text and Kermit file transfers verified</li>
+</ul>
+
+<h3>MM58167A Real-Time Clock Emulation</h3>
+<ul>
+<li>Full RTC register emulation (read and write) with BCD time counters</li>
+<li>Accessed via Z80 PIO at ports 0x20 (CLKADD), 0x22 (CLKCTL), 0x24 (CLKDAT)</li>
+<li>Time populated from host system clock on boot; user-set time offsets maintained for session</li>
+<li>TurboROM and KayPLUS polled clock display on row 25 works natively</li>
+<li>I/O address decoding updated (port mask 0xBF) to include A5 for U26/U27 decoder selection</li>
+</ul>
+
+<h3>WD1793 FDC Enhancements</h3>
+<ul>
+<li>WRITE TRACK (0xF0) support for disk formatting — parses WD1793 format data stream</li>
+<li>Multi-sector read/write (m=1) — auto-increments sector register until end of track</li>
+<li>WRITE SECTOR with Deleted Data Mark support</li>
+<li>Write protect status (S6) reported for read-only disk images</li>
+<li>READ ADDRESS stays BUSY for realistic polling duration</li>
+<li>Force Interrupt supports all I3-I0 values</li>
+<li>Head Loaded (S5) set in Type I command status</li>
+<li>Fixed SSDD disk crash when loaded on DSDD-configured machines</li>
+<li>Fixed FDC verify corruption for mixed-density formats</li>
+</ul>
+
+<h3>NMI Delivery Rework</h3>
+<ul>
+<li>Two-path delivery: immediate on HALT (standard BIOS), deadline-based fallback for polling programs</li>
+<li><code>nmi_vector_is_safe()</code> checks the byte at 0x0066 to detect valid NMI handlers</li>
+<li>KayPLUS (unsafe NMI vector) only receives NMI via the HALT path</li>
+</ul>
+
+<h3>CPU Speed Control</h3>
+<ul>
+<li>Press F9 to set CPU clock speed from 1-100 MHz with 0.5 MHz resolution</li>
+<li>Also settable via <code>--speed</code> command-line flag</li>
+<li>Enter -1 for unlimited speed (default)</li>
+</ul>
+
+<h3>25-Row Display</h3>
+<ul>
+<li>Screen renderer reads CRTC R6 register (displayed rows) instead of hardcoding 24</li>
+<li>TurboROM and KayPLUS set R6=25 for status line display</li>
+</ul>
+
+<h3>Headless Boot Tests</h3>
+<ul>
+<li><code>--boot-test</code> flag runs automated boot tests for all Kaypro models</li>
+<li>Tests Kaypro II, 4/84, TurboROM, and KayPLUS configurations</li>
+</ul>
+
+<h3>CLI Upgrade</h3>
+<ul>
+<li>Migrated from legacy argument parsing to clap v4 with <code>--param=value</code> style</li>
+<li>New flags: <code>--model</code>, <code>--drivea</code>, <code>--driveb</code>, <code>--rom</code>, <code>--speed</code>, <code>--serial</code></li>
+<li>Trace flags: <code>--bdos-trace</code>, <code>--sio-trace</code>, <code>--rtc-trace</code>, <code>--trace-all</code></li>
+</ul>
+
+<h3>Disk Image Reorganization</h3>
+<ul>
+<li>Disk images organized into subdirectories: <code>system/</code>, <code>blank_disks/</code>, <code>games/</code>, <code>productivity/</code>, <code>programming/</code>, <code>comm/</code>, <code>utilities/</code></li>
+</ul>
+
+<h2>Earlier Changes</h2>
 
 <h3>TOML Configuration System (v0.3.0)</h3>
 <ul>
