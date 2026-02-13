@@ -1,9 +1,0 @@
-binary-debuggable-source
-0000 0000 f /tmp/test.z
-0100 0100 s 	org	0100h
-0100 0100 d 3e00
-0100 0100 u 02 01
-0100 0100 s 	ld	a,0
-0102 0102 d c9
-0102 0102 u 01 01
-0102 0102 s 	ret

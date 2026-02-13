@@ -507,8 +507,8 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             rom_path: "roms/81-149c.rom",
             video_mode: crate::kaypro_machine::VideoMode::MemoryMapped,
             disk_format: crate::media::MediaFormat::SsDd,
-            disk_a: "disks/cpm22-rom149.img",
-            disk_b: "disks/cpm22-rom149-blank.img",
+            disk_a: "disks/system/cpm22-rom149.img",
+            disk_b: "disks/blank_disks/cpm22-rom149-blank.img",
             side1_sector_base: 10,
         },
         BootTestConfig {
@@ -516,8 +516,8 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             rom_path: "roms/81-292a.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
             disk_format: crate::media::MediaFormat::DsDd,
-            disk_a: "disks/cpm22g-rom292a.img",
-            disk_b: "disks/cpm22-kaypro4-blank.img",
+            disk_a: "disks/system/cpm22g-rom292a.img",
+            disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
         },
         BootTestConfig {
@@ -525,8 +525,8 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             rom_path: "roms/trom34.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
             disk_format: crate::media::MediaFormat::DsDd,
-            disk_a: "disks/k484_turborom_63k_boot.img",
-            disk_b: "disks/cpm22-kaypro4-blank.img",
+            disk_a: "disks/system/k484_turborom_63k_boot.img",
+            disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
         },
         BootTestConfig {
@@ -534,8 +534,8 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             rom_path: "roms/kplus84.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
             disk_format: crate::media::MediaFormat::DsDd,
-            disk_a: "disks/kayplus_boot.img",
-            disk_b: "disks/cpm22-kaypro4-blank.img",
+            disk_a: "disks/system/kayplus_boot.img",
+            disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 0,
         },
     ];

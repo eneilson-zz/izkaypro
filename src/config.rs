@@ -242,24 +242,24 @@ impl Config {
     /// Get the default boot disk path for this configuration
     pub fn get_default_disk_a(&self) -> &str {
         match self.model {
-            KayproModel::KayproII => "disks/cpm22-rom149.img",
-            KayproModel::Kaypro4_83 => "disks/k484-cpm22f-boot.img",
-            KayproModel::Kaypro4_84 => "disks/cpm22g-rom292a.img",
-            KayproModel::TurboRom => "disks/k484_turborom_63k_boot.img",
-            KayproModel::KayPlus84 => "disks/kayplus_boot.img",
-            KayproModel::Custom => self.disk_a.as_deref().unwrap_or("disks/k484-cpm22f-boot.img"),
+            KayproModel::KayproII => "disks/system/cpm22-rom149.img",
+            KayproModel::Kaypro4_83 => "disks/system/k484-cpm22f-boot.img",
+            KayproModel::Kaypro4_84 => "disks/system/cpm22g-rom292a.img",
+            KayproModel::TurboRom => "disks/system/k484_turborom_63k_boot.img",
+            KayproModel::KayPlus84 => "disks/system/kayplus_boot.img",
+            KayproModel::Custom => self.disk_a.as_deref().unwrap_or("disks/system/k484-cpm22f-boot.img"),
         }
     }
     
     /// Get the default disk B path for this configuration
     pub fn get_default_disk_b(&self) -> &str {
         match self.model {
-            KayproModel::KayproII => "disks/cpm22-rom149-blank.img",
-            KayproModel::Kaypro4_83 => "disks/cpm22-kaypro4-blank.img",
-            KayproModel::Kaypro4_84 => "disks/cpm22-kaypro4-blank.img",
-            KayproModel::TurboRom => "disks/cpm22-kaypro4-blank.img",
-            KayproModel::KayPlus84 => "disks/cpm22-kaypro4-blank.img",
-            KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/cpm22-kaypro4-blank.img"),
+            KayproModel::KayproII => "disks/blank_disks/cpm22-rom149-blank.img",
+            KayproModel::Kaypro4_83 => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::Kaypro4_84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::TurboRom => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::KayPlus84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/blank_disks/cpm22-kaypro4-blank.img"),
         }
     }
     

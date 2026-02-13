@@ -3,8 +3,8 @@ use std::io::Read;
 use super::media::{self, *};
 
 // Fallback embedded disk images (used when external files can't be loaded)
-static FALLBACK_DISK_DSDD: &[u8] = include_bytes!("../disks/cpm22g-rom292a.img");
-static FALLBACK_BLANK_DSDD: &[u8] = include_bytes!("../disks/cpm22-kaypro4-blank.img");
+static FALLBACK_DISK_DSDD: &[u8] = include_bytes!("../disks/system/cpm22g-rom292a.img");
+static FALLBACK_BLANK_DSDD: &[u8] = include_bytes!("../disks/blank_disks/cpm22-kaypro4-blank.img");
 
 pub enum Drive {
     A = 0,
