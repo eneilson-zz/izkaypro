@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 mod config;
 mod kaypro_machine;
 mod floppy_controller;
+mod hard_disk;
 mod keyboard_unix;
 mod media;
 mod screen;
@@ -32,7 +33,7 @@ use self::keyboard_unix::Command;
     version,
 )]
 struct Cli {
-    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, kayplus_84, custom]
+    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, kayplus_84, kaypro10, custom]
     #[arg(short = 'm', long, value_name = "MODEL")]
     model: Option<String>,
 
@@ -92,6 +93,10 @@ struct Cli {
     #[arg(long)]
     rtc_trace: bool,
 
+    /// Trace WD1002-05 hard disk controller (Kaypro 10)
+    #[arg(long)]
+    hdc_trace: bool,
+
     /// Connect SIO-1 Port A to a serial device (e.g., /dev/ttyUSB0, /tmp/kayproA)
     #[arg(long, value_name = "DEVICE")]
     serial: Option<String>,
@@ -141,8 +146,10 @@ fn main() {
     let trace_crtc = cli.crtc_trace || cli.trace_all;
     let trace_sio = cli.sio_trace || cli.trace_all;
     let trace_rtc = cli.rtc_trace || cli.trace_all;
+    let trace_hdc = cli.hdc_trace || cli.trace_all;
     let run_diag = cli.diagnostics;
     let run_boot_test = cli.boot_test;
+    let has_hard_disk = config.model == KayproModel::Kaypro10;
 
     let any_trace = trace_io
         || trace_cpu
@@ -153,6 +160,7 @@ fn main() {
         || trace_crtc
         || trace_sio
         || trace_rtc
+        || trace_hdc
         || trace_system_bits;
 
     // Init device with configuration
@@ -169,11 +177,13 @@ fn main() {
         config.get_rom_path(),
         config.get_video_mode(),
         floppy_controller,
+        has_hard_disk,
         trace_io,
         trace_system_bits,
         trace_crtc,
         trace_sio,
         trace_rtc,
+        trace_hdc,
     );
     machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
     let mut cpu = Cpu::new_z80();

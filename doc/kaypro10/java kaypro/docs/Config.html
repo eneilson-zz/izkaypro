@@ -1,0 +1,111 @@
+<HTML>
+<HEAD>
+</HEAD>
+<BODY>
+<H4>Basic Configuration</H4>
+
+<P>The configuration file is a plain-text properties file
+(format: <I>property</I>=<I>value</I>).
+The following properties are recognized (shown with default value, if any):
+
+<DL>
+</DD><DT><B>kaypro_log</B> = (stderr)</DT><DD>
+	Log Java messages to file
+
+</DD><DT><B>kaypro_model</B> = "84"</DT><DD>
+	Kaypro machine model. "2/84", "2X", etc.
+	An optional "E" may be appended, for enhanced hardware
+	(256K RAM, RTC).
+
+</DD><DT><B>kaypro_font</B> = Kaypro84.ttf</DT><DD>
+	TrueType font to use. Depends on CRT model.
+	For current models, font must use special character encoding:
+	<PRE>
+	\u0020-\u00ff: Char Gen 20-FF (graphics 80-FF)
+	\u0100-\u011f: Char Gen 00-1F (greek)
+	\ue100-\ue1ff: Char Gen 00-FF Reverse Video
+	\ue800-\ue8ff: Char Gen 00-FF Underlined
+	\ue900-\ue9ff: Char Gen 00-FF Rev Vid + Undl </PRE>
+
+</DD><DT><B>kaypro_font_size</B> = 16</DT><DD>
+	Font height. Must be multiple of 16 for decent
+	results.
+
+</DD><DT><B>kaypro_font_color</B> = 00ff00</DT><DD>
+	Color for normal video
+
+</DD><DT><B>kaypro_font_color2</B> = (kaypro_font_color.darker().darker())</DT><DD>
+	Color for Half-Intensity
+
+</DD><DT><B>kaypro_paste_rate</B> = 0</DT>
+<DT><B>kaypro_paste_cr_delay</B> = 0</DT><DD>
+	Used to avoid overrun when pasting text to the screen.
+	Should only be needed if the OS is trying to buffer keyboard
+	characters, such as using interrupts or background polling.
+	Note, the Universal ROM (81-478a) does polled buffering.
+	paste_rate is in chars/sec, recommended value 33.
+	paste_cr_delay is in millisec, recommended value 100.
+
+</DD><DT><B>kaypro_trace</B> = (none)</DT><DD>
+	Debug CPU tracing for early execution
+
+</DD><DT><B>kaypro_disas</B> = MAC80</DT><DD>
+	Instruction mnemonic style for trace. "Zilog" or "MAC80".
+	MAC80 implies use of extended Z80.LIB macros.
+
+</DD><DT><B>kaypro_beep</B> = kpbeep.wav</DT><DD>
+	WAV file to use for ASCII BEL (^G) sound
+
+</DD><DT><B>kaypro_beep_volume</B> = 50</DT><DD>
+	Audio volume setting for beep (%)
+
+</DD><DT><B>monitor_rom</B> = (varies by model)</DT><DD>
+	ROM image to use. Default varies with model.
+
+</DD><DT><B>floppy_drive[1-4]</B> = (none)</DT><DD>
+	Type of floppy drive, and label for menu. Max drive varies with model.
+	Defaults to standard drives shipped with model.
+
+</DD><DT><B>floppy_disk[1-4]</B> = (none)</DT><DD>
+	Diskette image to load at start.
+
+</DD><DT><B>wd1002_drive1</B> = ST412</DT><DD>
+	Winchester harddisk model (may require software changes).
+	Only one drive currently supported. Kaypro 10 seems hard-wired
+	for LUN 1. Default used only if model indicates a harddisk.
+</DD><DT><B>wd1002_disk1</B> = WD1002-1</DT><DD>
+	Winchester harddisk image file. File will be created if needed,
+	however ROMs expect more initialization before they recognize it.
+
+</DD><DT><B>data_att</B> = (special)</DT>
+<DT><B>kbd_att</B> = (special)</DT>
+<DT><B>aux_att</B> = (special)</DT>
+<DT><B>modem_att</B> = (special)</DT><DD>
+	Attach object (device) to serial port. Options are
+	"Diablo630Serial", "ProgramSerial", or "&gt;<I>file</I>".
+</DD><DT><B>pprinter_att</B> = (special)</DT><DD>
+	Attach object (device) to parallel printer port.
+	"Diablo630Parallel", "ProgramParallel", or "&gt;<I>file</I>".
+
+</DD><DT><B>cpnetdevice_clientid</B> = (none)</DT><DD>
+	Enables inclusion of the CP/Net device virtual hardware, configured
+	with the specified node ID (hex, 01-FE). Uses base I/O port 038H.
+</DD><DT><B>cpnetdevice_server##</B> = (special)</DT><DD>
+	Configures network server at node ID ## (hex, 00-FE) as the specified type.
+	Options are "HostFileBdos" or "Socket". Syntax:
+	<PRE>
+	HostFileBdos [<I>root-dir</I> [<I>temp-drv</I>]]
+	Socket <I>host</I> <I>port</I> </PRE>
+	Default <I>temp-drv</I> is P:, default <I>root-dir</I> is ~/HostFileBdos.
+
+</DD><DT><B>hostfilebdos##_root_dir</B> = ~/HostFileBdos</DT><DD>
+	Alternate method of specifying <I>root-dir</I> for server ID ##.
+
+</DD><DT><B>hostfilebdos##_lst#</B> = (special)</DT><DD>
+	Configures LST: device # (hex, 0-F) on HostFileBdos server ##.
+	Options are "Diablo630Stream", "ProgramStream", or "&gt;<I>file</I>".
+</DD>
+</DL>
+
+</BODY>
+</HTML>

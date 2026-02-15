@@ -1,0 +1,14 @@
+#!/bin/bash
+
+cat <<EOF
+<HTML><CENTER>
+Kaypro Computer Simulator<BR>
+Build: $(date)<BR>
+<BR>
+<IMG SRC="kaypro10-sm.png">
+<BR>
+Developed by Douglas Miller<BR>
+http://sims.durgadas.com/kaypro/kaypro.html<BR>
+<BR>
+</CENTER></HTML>
+EOF

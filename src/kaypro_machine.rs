@@ -2,6 +2,7 @@ use std::fs::{File};
 use std::io::{Write};
 use iz80::Machine;
 use super::FloppyController;
+use super::hard_disk::HardDisk;
 use super::keyboard_unix::Keyboard;
 use super::rtc::Rtc;
 use super::sio::Sio;
@@ -109,8 +110,12 @@ pub struct KayproMachine {
 
     pub kayplus_clock_fixup: bool,
 
+    // Kaypro 10: track previous port 0x14 bit 1 for SASI reset edge detection
+    port14_last_bit1: bool,
+
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
+    pub hard_disk: Option<HardDisk>,
     pub sio: Sio,
     pub rtc: Rtc,
 }
@@ -120,11 +125,13 @@ impl KayproMachine {
         rom_path: &str,
         video_mode: VideoMode,
         floppy_controller: FloppyController,
+        has_hard_disk: bool,
         trace_io: bool,
         trace_system_bits: bool,
         trace_crtc: bool,
         trace_sio: bool,
         trace_rtc: bool,
+        trace_hdc: bool,
     ) -> KayproMachine {
         // Load ROM from file, fall back to embedded if not found
         let rom_data = Self::load_rom_or_fallback(rom_path);
@@ -156,8 +163,10 @@ impl KayproMachine {
             trace_io,
             trace_system_bits,
             kayplus_clock_fixup: false,
+            port14_last_bit1: false,
             keyboard: Keyboard::new(),
             floppy_controller,
+            hard_disk: if has_hard_disk { Some(HardDisk::new(trace_hdc)) } else { None },
             sio: Sio::new(trace_sio),
             rtc: Rtc::new(trace_rtc),
         }
@@ -287,6 +296,15 @@ impl KayproMachine {
 
         self.system_bits = sys_bits;
         self.port14_raw = bits; // Save raw value for reads
+
+        // SASI reset edge detection (Kaypro 10): bit 1 high->low triggers reset
+        let bit1 = bits & 0x02 != 0;
+        if self.port14_last_bit1 && !bit1 {
+            if let Some(ref mut hd) = self.hard_disk {
+                hd.sasi_reset();
+            }
+        }
+        self.port14_last_bit1 = bit1;
 
         // Apply settings to floppy controller
         if let Some(d) = drive {
@@ -458,6 +476,14 @@ impl Machine for KayproMachine {
     fn port_out(&mut self, address: u16, value: u8) {
 
         let port = address as u8 & 0b_1011_1111; // A7 enables decoder, A6 unused, A5 selects U26/U27
+
+        // WD1002-05 hard disk controller occupies ports 0x80-0x87
+        if port >= 0x80 && port <= 0x87 {
+            if let Some(ref mut hd) = self.hard_disk {
+                hd.write_register(port, value);
+            }
+            return;
+        }
         if port >= 0x80 {
             // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {
@@ -536,6 +562,14 @@ impl Machine for KayproMachine {
 
     fn port_in(&mut self, address: u16) -> u8 {
         let port = address as u8 & 0b_1011_1111; // A7 enables decoder, A6 unused, A5 selects U26/U27
+
+        // WD1002-05 hard disk controller occupies ports 0x80-0x87
+        if port >= 0x80 && port <= 0x87 {
+            if let Some(ref mut hd) = self.hard_disk {
+                return hd.read_register(port);
+            }
+            return 0xFF;
+        }
         if port >= 0x80 { // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {
                 println!("IN(0x{:02x} 'Ignored')", port);

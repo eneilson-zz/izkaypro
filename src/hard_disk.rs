@@ -1,0 +1,581 @@
+/// WD1002-05 Winchester Hard Disk Controller emulation for Kaypro 10.
+///
+/// The WD1002-05 uses an ST412 interface to control a hard drive with
+/// 306 cylinders, 4 heads, 17 sectors per track, 512 bytes per sector
+/// (total capacity ~10.4 MB). The controller is accessed via I/O ports
+/// 0x80-0x87 (task file registers).
+///
+/// Reference: 61-031050-0030 WD1002-05 HDO OEM Manual (July 1983)
+
+const CYLINDERS: u16 = 306;
+const HEADS: u8 = 4;
+const SECTORS_PER_TRACK: u8 = 17;
+const SECTOR_SIZE: usize = 512;
+const DISK_SIZE: usize = CYLINDERS as usize * HEADS as usize
+    * SECTORS_PER_TRACK as usize * SECTOR_SIZE;
+
+// Status register bits (port 0x87 read)
+const STS_BUSY: u8 = 0x80;
+const STS_READY: u8 = 0x40;
+#[allow(dead_code)]
+const STS_WRITE_FAULT: u8 = 0x20;
+const STS_SEEK_DONE: u8 = 0x10;
+const STS_DRQ: u8 = 0x08;
+#[allow(dead_code)]
+const STS_CORRECTED: u8 = 0x04;
+const STS_ERROR: u8 = 0x01;
+
+// Error register bits (port 0x81 read)
+#[allow(dead_code)]
+const ERR_BAD_BLOCK: u8 = 0x80;
+#[allow(dead_code)]
+const ERR_UNCORRECTABLE: u8 = 0x40;
+#[allow(dead_code)]
+const ERR_CRC: u8 = 0x20;
+const ERR_ID_NOT_FOUND: u8 = 0x10;
+const ERR_ABORTED: u8 = 0x04;
+#[allow(dead_code)]
+const ERR_TR000: u8 = 0x02;
+#[allow(dead_code)]
+const ERR_DAM_NOT_FOUND: u8 = 0x01;
+
+// Diagnostic error codes (written to error register after reset)
+#[allow(dead_code)]
+const DIAG_PASS: u8 = 0x00;
+const DIAG_WD2797: u8 = 0x01;
+
+// Command augment bits
+const CMD_MULTI_SEC: u8 = 0x04;
+const CMD_LONG: u8 = 0x02;
+
+pub struct HardDisk {
+    pub trace: bool,
+
+    // Task file registers (cmdBuf[] in Java)
+    data: u8,
+    error: u8,
+    sector_count: u8,
+    sector_number: u8,
+    cylinder_low: u8,
+    cylinder_high: u8,
+    sdh: u8,
+    status: u8,
+
+    // Current command being executed
+    cur_cmd: u8,
+    // Write precompensation (accepted but ignored)
+    #[allow(dead_code)]
+    precomp: u8,
+
+    // SASI reset state: BUSY is held during diagnostics (~1-2s real HW).
+    // We simulate with a countdown decremented on status reads.
+    reset_pending: bool,
+    busy_countdown: u16,
+
+    // Data transfer buffer and state
+    data_buf: Vec<u8>,
+    data_length: usize,
+    data_ix: usize,
+    wr_off: usize, // Disk offset latched at WRITE SECTOR start
+
+    // True when a disk image has been loaded (equivalent to Java's driveFd != null).
+    // When false, the controller is detected by the ROM (reset/status/error work)
+    // but all commands fail, causing the ROM to fall back to floppy boot.
+    drive_present: bool,
+
+    // Hard disk image (raw sector data, not file-backed yet)
+    disk_data: Vec<u8>,
+}
+
+impl HardDisk {
+    pub fn new(trace: bool) -> HardDisk {
+        HardDisk {
+            trace,
+            data: 0,
+            error: 0,
+            sector_count: 0,
+            sector_number: 0,
+            cylinder_low: 0,
+            cylinder_high: 0,
+            sdh: 0,
+            status: 0,
+            cur_cmd: 0,
+            precomp: 0,
+            reset_pending: false,
+            busy_countdown: 0,
+            data_buf: vec![0u8; SECTOR_SIZE + 4], // +4 for ECC in LONG mode
+            data_length: SECTOR_SIZE,
+            data_ix: 0,
+            wr_off: 0,
+            drive_present: false,
+            disk_data: Vec::new(),
+        }
+    }
+
+    // --- Geometry helpers ---
+
+    fn get_cyl(&self) -> u16 {
+        ((self.cylinder_high as u16) << 8) | self.cylinder_low as u16
+    }
+
+    fn get_head(&self) -> u8 {
+        self.sdh & 0x07
+    }
+
+    fn get_lun(&self) -> u8 {
+        (self.sdh >> 3) & 0x03
+    }
+
+    /// CHS → byte offset into disk_data.
+    fn get_off(&self) -> usize {
+        let cyl = self.get_cyl() as usize;
+        let head = self.get_head() as usize;
+        let sec = self.sector_number as usize;
+        ((cyl * HEADS as usize + head) * SECTORS_PER_TRACK as usize + sec)
+            * SECTOR_SIZE
+    }
+
+    /// Check if the current CHS address is within disk capacity.
+    fn address_valid(&self) -> bool {
+        self.get_off() + SECTOR_SIZE <= DISK_SIZE
+    }
+
+    // --- Status helpers (bit-level mutation like real hardware) ---
+
+    fn set_done(&mut self) {
+        self.status &= !(STS_DRQ | STS_BUSY);
+    }
+
+    fn set_error(&mut self, err: u8) {
+        self.error |= err;
+        self.status |= STS_ERROR;
+        self.set_done();
+    }
+
+    // --- Reset ---
+
+    /// Called when port 0x14 bit 1 goes LOW (active-low at port level).
+    /// Through the 7406 inverter (U13), this asserts MR HIGH on the
+    /// WD1002-05. Per the spec, BUSY is set within 200ns and held
+    /// for ~1-2 seconds while internal diagnostics run.
+    pub fn sasi_reset(&mut self) {
+        if self.trace {
+            println!("HDC: SASI reset asserted");
+        }
+        self.data_ix = 0;
+        self.cur_cmd = 0;
+        // Clear all task file registers
+        self.data = 0;
+        self.error = 0;
+        self.sector_count = 0;
+        self.sector_number = 0;
+        self.cylinder_low = 0;
+        self.cylinder_high = 0;
+        self.sdh = 0;
+        // BUSY set immediately; cleared when diagnostics complete
+        self.status = STS_BUSY;
+        self.reset_pending = true;
+        // The ROM polls status in a tight loop (~0x6000 iterations with
+        // delay calls). We use a countdown decremented on each status
+        // read so BUSY clears after a realistic number of polls.
+        self.busy_countdown = 20;
+    }
+
+    // --- Port I/O ---
+
+    /// Write to task file register (ports 0x80-0x87).
+    pub fn write_register(&mut self, port: u8, value: u8) {
+        let reg = port & 0x07;
+        match reg {
+            0 => {
+                // Data Register — feed into write buffer
+                self.put_data(value);
+            }
+            1 => {
+                // Write Precompensation — accepted, ignored
+                self.precomp = value;
+            }
+            2 => {
+                self.sector_count = value;
+                if self.trace {
+                    println!("HDC: Sector Count = {}", value);
+                }
+            }
+            3 => {
+                self.sector_number = value;
+                if self.trace {
+                    println!("HDC: Sector Number = {}", value);
+                }
+            }
+            4 => {
+                self.cylinder_low = value;
+                if self.trace {
+                    println!("HDC: Cylinder Low = 0x{:02X}", value);
+                }
+            }
+            5 => {
+                self.cylinder_high = value;
+                if self.trace {
+                    println!("HDC: Cylinder High = 0x{:02X}", value);
+                }
+            }
+            6 => {
+                // SDH Register — drive/head select
+                let lun = (value >> 3) & 0x03;
+                if self.trace {
+                    let head = value & 0x07;
+                    println!("HDC: SDH = 0x{:02X} (LUN={}, head={})", value, lun, head);
+                }
+                // Set READY when a valid LUN is selected (0 or 1).
+                // LUN 2 = hard disk 3 (not present), LUN 3 = floppy.
+                if lun <= 1 {
+                    self.status |= STS_READY;
+                } else {
+                    self.status &= !STS_READY;
+                }
+                self.sdh = value;
+            }
+            7 => {
+                // Command Register — clear error state and dispatch
+                self.cur_cmd = value;
+                self.status &= !STS_ERROR;
+                self.error = 0;
+                self.process_cmd();
+            }
+            _ => {}
+        }
+    }
+
+    /// Read from task file register (ports 0x80-0x87).
+    pub fn read_register(&mut self, port: u8) -> u8 {
+        let reg = port & 0x07;
+        let val = match reg {
+            0 => {
+                // Data Register — read advances the transfer buffer
+                let v = self.data;
+                self.get_data();
+                v
+            }
+            1 => self.error,
+            2 => self.sector_count,
+            3 => self.sector_number,
+            4 => self.cylinder_low,
+            5 => self.cylinder_high,
+            6 => self.sdh,
+            7 => return self.read_status(), // has its own trace
+            _ => 0xFF,
+        };
+        if self.trace && reg <= 1 {
+            let name = match reg {
+                0 => "Data",
+                1 => "Error",
+                _ => "",
+            };
+            println!("HDC: Read {} = 0x{:02X}", name, val);
+        }
+        val
+    }
+
+    fn read_status(&mut self) -> u8 {
+        // Handle busy countdown from SASI reset diagnostics
+        if self.busy_countdown > 0 {
+            self.busy_countdown -= 1;
+            if self.busy_countdown == 0 {
+                if self.reset_pending {
+                    // Diagnostics complete. Per WD spec section 5.4:
+                    // error register gets diagnostic code, but the ERROR
+                    // status bit is NOT set (even for non-zero codes).
+                    self.error = DIAG_WD2797; // 0x01: no WD2797 floppy chip
+                    self.reset_pending = false;
+                    self.status = STS_READY | STS_SEEK_DONE;
+                    if self.trace {
+                        println!("HDC: Reset diagnostics complete, error=0x{:02X}, status=0x{:02X}",
+                            self.error, self.status);
+                    }
+                }
+            }
+        }
+        if self.trace {
+            println!("HDC: Read Status = 0x{:02X}", self.status);
+        }
+        self.status
+    }
+
+    // --- Command processing ---
+
+    fn process_cmd(&mut self) {
+        let cmd_type = self.cur_cmd & 0xF0;
+
+        // No disk image loaded — all commands fail (Java: driveFd == null)
+        if !self.drive_present {
+            if self.trace {
+                println!("HDC: Command 0x{:02X} rejected — no disk image loaded", self.cur_cmd);
+            }
+            self.set_error(ERR_ABORTED);
+            return;
+        }
+
+        // Validate LUN (accept 0 and 1 only)
+        let lun = self.get_lun();
+        if lun > 1 {
+            if self.trace {
+                println!("HDC: Command 0x{:02X} rejected — LUN {} not present", self.cur_cmd, lun);
+            }
+            self.set_error(ERR_ABORTED);
+            return;
+        }
+
+        if self.trace {
+            println!("HDC: Command 0x{:02X} (LUN={}, C={}, H={}, S={}, N={})",
+                self.cur_cmd, lun, self.get_cyl(), self.get_head(),
+                self.sector_number, self.sector_count);
+        }
+
+        match cmd_type {
+            0x10 => self.cmd_restore(),
+            0x20 => self.cmd_read_sector(),
+            0x30 => self.cmd_write_sector(),
+            0x50 => self.cmd_format_track(),
+            0x70 => self.cmd_seek(),
+            0x90 => self.cmd_test(),
+            _ => {
+                if self.trace {
+                    println!("HDC: Unknown command 0x{:02X}", self.cur_cmd);
+                }
+                self.set_error(ERR_ABORTED);
+            }
+        }
+    }
+
+    /// RESTORE (0x1r): Recalibrate — move heads to cylinder 0.
+    /// Per spec and Java: immediate completion, sets SEEK_DONE.
+    fn cmd_restore(&mut self) {
+        self.cylinder_low = 0;
+        self.cylinder_high = 0;
+        self.status |= STS_SEEK_DONE;
+        if self.trace {
+            println!("HDC: RESTORE complete");
+        }
+    }
+
+    /// SEEK (0x7r): Position heads at cylinder specified in task file.
+    /// Per spec and Java: immediate completion, sets SEEK_DONE.
+    fn cmd_seek(&mut self) {
+        if !self.address_valid() {
+            if self.trace {
+                println!("HDC: SEEK failed — address out of range");
+            }
+            self.set_error(ERR_ID_NOT_FOUND);
+            return;
+        }
+        self.status |= STS_SEEK_DONE;
+        if self.trace {
+            println!("HDC: SEEK complete — C={}, H={}", self.get_cyl(), self.get_head());
+        }
+    }
+
+    /// TEST (0x90): Internal diagnostics. Immediate pass.
+    fn cmd_test(&mut self) {
+        self.error = DIAG_WD2797; // Same as reset: no floppy chip
+        // Per spec: ERROR status bit is NOT set for diagnostic codes
+        if self.trace {
+            println!("HDC: TEST complete, diag=0x{:02X}", self.error);
+        }
+    }
+
+    /// READ SECTOR (0x2x): Read sector(s) from disk to host via PIO.
+    /// Bit 3 (D): 0=PIO, 1=DMA (we only support PIO)
+    /// Bit 2 (M): multi-sector
+    /// Bit 1 (L): long (include 4 ECC bytes)
+    fn cmd_read_sector(&mut self) {
+        let off = self.get_off();
+        if off + SECTOR_SIZE > DISK_SIZE {
+            if self.trace {
+                println!("HDC: READ SECTOR failed — address out of range");
+            }
+            self.set_error(ERR_ID_NOT_FOUND);
+            return;
+        }
+
+        // Copy sector data into transfer buffer
+        self.data_buf[..SECTOR_SIZE].copy_from_slice(&self.disk_data[off..off + SECTOR_SIZE]);
+        self.data_length = SECTOR_SIZE;
+
+        // LONG mode: append 4 fake ECC bytes
+        if self.cur_cmd & CMD_LONG != 0 {
+            self.data_buf[SECTOR_SIZE] = 0;
+            self.data_buf[SECTOR_SIZE + 1] = 0;
+            self.data_buf[SECTOR_SIZE + 2] = 0;
+            self.data_buf[SECTOR_SIZE + 3] = 0;
+            self.data_length += 4;
+        }
+
+        self.data_ix = 0;
+        // Prime first byte and set DRQ (PIO mode: DRQ set, BUSY cleared)
+        self.get_data();
+
+        if self.trace {
+            println!("HDC: READ SECTOR — offset 0x{:X}, {} bytes", off, self.data_length);
+        }
+    }
+
+    /// WRITE SECTOR (0x3x): Write sector(s) from host to disk via PIO.
+    /// Bit 2 (M): multi-sector
+    /// Bit 1 (L): long (expect 4 extra ECC bytes)
+    fn cmd_write_sector(&mut self) {
+        self.wr_off = self.get_off();
+        if self.wr_off + SECTOR_SIZE > DISK_SIZE {
+            if self.trace {
+                println!("HDC: WRITE SECTOR failed — address out of range");
+            }
+            self.set_error(ERR_ID_NOT_FOUND);
+            return;
+        }
+
+        self.data_length = SECTOR_SIZE;
+        if self.cur_cmd & CMD_LONG != 0 {
+            self.data_length += 4;
+        }
+        self.data_ix = 0;
+        // Set DRQ and BUSY — host must fill the buffer
+        self.status |= STS_DRQ | STS_BUSY;
+
+        if self.trace {
+            println!("HDC: WRITE SECTOR — offset 0x{:X}, expecting {} bytes",
+                self.wr_off, self.data_length);
+        }
+    }
+
+    /// FORMAT TRACK (0x50): Format a track using interleave table from host.
+    /// Host writes 2 bytes per sector (bad block byte + logical sector number).
+    fn cmd_format_track(&mut self) {
+        if !self.address_valid() {
+            if self.trace {
+                println!("HDC: FORMAT failed — address out of range");
+            }
+            self.set_error(ERR_ID_NOT_FOUND);
+            return;
+        }
+
+        // Expect interleave table: 2 bytes per sector
+        self.data_length = SECTORS_PER_TRACK as usize * 2;
+        self.data_ix = 0;
+        self.status |= STS_DRQ | STS_BUSY;
+
+        if self.trace {
+            println!("HDC: FORMAT TRACK — C={}, H={}, expecting {} bytes interleave table",
+                self.get_cyl(), self.get_head(), self.data_length);
+        }
+    }
+
+    // --- Data transfer (PIO) ---
+
+    /// Called when the host reads the Data Register (port 0x80).
+    /// Advances the read buffer index. When the buffer is exhausted,
+    /// handles multi-sector continuation or completes the transfer.
+    fn get_data(&mut self) {
+        if self.data_ix < self.data_length {
+            self.data = self.data_buf[self.data_ix];
+            self.data_ix += 1;
+            self.status |= STS_DRQ;
+            return;
+        }
+
+        // Buffer exhausted
+        self.data_ix = 0;
+
+        if self.cur_cmd & CMD_MULTI_SEC != 0 && self.sector_count > 0 {
+            self.sector_count -= 1;
+            self.sector_number = self.sector_number.wrapping_add(1);
+            if self.sector_number >= SECTORS_PER_TRACK {
+                self.sector_number = 0;
+            }
+            if self.sector_count > 0 {
+                // Continue with next sector
+                self.process_cmd();
+                return;
+            }
+        }
+        self.set_done();
+    }
+
+    /// Called when the host writes the Data Register (port 0x80).
+    /// Fills the write buffer. When full, commits data to disk and
+    /// handles multi-sector continuation.
+    fn put_data(&mut self, val: u8) {
+        self.data = val;
+
+        if self.data_ix < self.data_length {
+            self.data_buf[self.data_ix] = val;
+            self.data_ix += 1;
+            if self.data_ix < self.data_length {
+                self.status |= STS_DRQ;
+            } else {
+                // Buffer full — process the received data
+                self.process_data();
+            }
+            return;
+        }
+        self.set_done();
+    }
+
+    /// Called when a write buffer is full. Commits data to disk for
+    /// WRITE SECTOR, or handles FORMAT completion.
+    fn process_data(&mut self) {
+        let cmd_type = self.cur_cmd & 0xF0;
+        match cmd_type {
+            0x30 => {
+                // WRITE SECTOR — commit buffer to disk image
+                // Only write the actual sector data (not ECC bytes)
+                let write_len = SECTOR_SIZE.min(self.data_length);
+                let off = self.wr_off;
+                if off + write_len <= DISK_SIZE {
+                    self.disk_data[off..off + write_len]
+                        .copy_from_slice(&self.data_buf[..write_len]);
+                    if self.trace {
+                        println!("HDC: WRITE SECTOR committed {} bytes at offset 0x{:X}",
+                            write_len, off);
+                    }
+                }
+
+                self.data_ix = 0;
+                if self.cur_cmd & CMD_MULTI_SEC != 0 && self.sector_count > 0 {
+                    self.sector_count -= 1;
+                    self.sector_number = self.sector_number.wrapping_add(1);
+                    if self.sector_number >= SECTORS_PER_TRACK {
+                        self.sector_number = 0;
+                    }
+                    if self.sector_count > 0 {
+                        // Re-latch offset for next sector and request more data
+                        self.wr_off = self.get_off();
+                        self.status |= STS_DRQ | STS_BUSY;
+                        return;
+                    }
+                }
+                self.set_done();
+            }
+            0x50 => {
+                // FORMAT TRACK — interleave table received (ignored)
+                // The real controller would write sector headers; we just
+                // zero the track data to simulate a fresh format.
+                let cyl = self.get_cyl() as usize;
+                let head = self.get_head() as usize;
+                let track_off = (cyl * HEADS as usize + head)
+                    * SECTORS_PER_TRACK as usize * SECTOR_SIZE;
+                let track_len = SECTORS_PER_TRACK as usize * SECTOR_SIZE;
+                if track_off + track_len <= DISK_SIZE {
+                    for b in &mut self.disk_data[track_off..track_off + track_len] {
+                        *b = 0xE5; // Standard CP/M fill byte
+                    }
+                    if self.trace {
+                        println!("HDC: FORMAT TRACK complete — C={}, H={}", cyl, head);
+                    }
+                }
+                self.set_done();
+            }
+            _ => {
+                self.set_done();
+            }
+        }
+    }
+}

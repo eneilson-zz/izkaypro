@@ -554,7 +554,7 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         cfg.disk_a, cfg.disk_b, cfg.disk_format, cfg.side1_sector_base, false, false,
     );
     let mut machine = crate::kaypro_machine::KayproMachine::new(
-        cfg.rom_path, cfg.video_mode, fdc, false, false, false, false, false,
+        cfg.rom_path, cfg.video_mode, fdc, false, false, false, false, false, false, false,
     );
     let mut cpu = Cpu::new_z80();
 
