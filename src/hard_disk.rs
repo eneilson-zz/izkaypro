@@ -116,7 +116,7 @@ impl HardDisk {
             precomp: 0,
             reset_pending: false,
             busy_countdown: 0,
-            data_buf: vec![0u8; SECTOR_SIZE + 4], // +4 for ECC in LONG mode
+            data_buf: vec![0u8; 1024 + 4], // max sector size (1024) + 4 ECC bytes
             data_length: SECTOR_SIZE,
             data_ix: 0,
             wr_off: 0,
@@ -466,6 +466,7 @@ impl HardDisk {
     /// Bit 1 (L): long (include 4 ECC bytes)
     fn cmd_read_sector(&mut self) {
         let off = self.get_off();
+        let xfer_size = self.get_sector_size();
         if off + SECTOR_SIZE > DISK_SIZE {
             if self.trace {
                 eprintln!("HDC: READ SECTOR failed — address out of range");
@@ -488,16 +489,19 @@ impl HardDisk {
             return;
         }
 
-        // Copy sector data into transfer buffer
-        self.data_buf[..SECTOR_SIZE].copy_from_slice(&self.disk_data[off..off + SECTOR_SIZE]);
-        self.data_length = SECTOR_SIZE;
+        // Copy sector data into transfer buffer. Transfer size comes from
+        // SDH bits 6:5 (256 or 512 for Kaypro). Disk image always stores
+        // 512-byte physical sectors; we transfer only xfer_size bytes.
+        let copy_len = xfer_size.min(SECTOR_SIZE);
+        self.data_buf[..copy_len].copy_from_slice(&self.disk_data[off..off + copy_len]);
+        self.data_length = xfer_size;
 
         // LONG mode: append 4 fake ECC bytes
         if self.cur_cmd & CMD_LONG != 0 {
-            self.data_buf[SECTOR_SIZE] = 0;
-            self.data_buf[SECTOR_SIZE + 1] = 0;
-            self.data_buf[SECTOR_SIZE + 2] = 0;
-            self.data_buf[SECTOR_SIZE + 3] = 0;
+            self.data_buf[xfer_size] = 0;
+            self.data_buf[xfer_size + 1] = 0;
+            self.data_buf[xfer_size + 2] = 0;
+            self.data_buf[xfer_size + 3] = 0;
             self.data_length += 4;
         }
 
@@ -523,7 +527,8 @@ impl HardDisk {
             return;
         }
 
-        self.data_length = SECTOR_SIZE;
+        // Transfer size comes from SDH bits 6:5 (256 or 512 for Kaypro)
+        self.data_length = self.get_sector_size();
         if self.cur_cmd & CMD_LONG != 0 {
             self.data_length += 4;
         }
@@ -534,6 +539,18 @@ impl HardDisk {
         if self.trace {
             eprintln!("HDC: WRITE SECTOR — offset 0x{:X}, expecting {} bytes",
                 self.wr_off, self.data_length);
+        }
+    }
+
+    /// Extract sector size from SDH register bits 6:5.
+    /// Per WD1002-05 spec: 00=256, 01=512, 10=1024, 11=128.
+    fn get_sector_size(&self) -> usize {
+        match (self.sdh >> 5) & 0x03 {
+            0 => 256,
+            1 => 512,
+            2 => 1024,
+            3 => 128,
+            _ => unreachable!(),
         }
     }
 
@@ -548,16 +565,17 @@ impl HardDisk {
             return;
         }
 
-        // HDFMT sends 512 bytes (two Z80 OTIRs of 256 bytes each):
-        // 34 bytes of interleave table followed by padding. The controller
-        // must absorb all bytes before completing. Java also uses 512.
-        self.data_length = SECTOR_SIZE;
+        // The host sends an interleave table whose size equals the
+        // sector size encoded in the SDH register (bits 6:5).
+        // HDFMT uses SDH=0xA0 (512-byte, 2 OTIRs) or SDH=0x80
+        // (256-byte, 1 OTIR). We must match the expected length.
+        self.data_length = self.get_sector_size();
         self.data_ix = 0;
         self.status |= STS_DRQ | STS_BUSY;
 
         if self.trace {
-            eprintln!("HDC: FORMAT TRACK — C={}, H={}, expecting {} bytes interleave table",
-                self.get_cyl(), self.get_head(), self.data_length);
+            eprintln!("HDC: FORMAT TRACK — C={}, H={}, SDH=0x{:02X}, expecting {} bytes",
+                self.get_cyl(), self.get_head(), self.sdh, self.data_length);
         }
     }
 
@@ -619,8 +637,10 @@ impl HardDisk {
         match cmd_type {
             0x30 => {
                 // WRITE SECTOR — commit buffer to disk image
-                // Only write the actual sector data (not ECC bytes)
-                let write_len = SECTOR_SIZE.min(self.data_length);
+                // Only write the actual sector data (not ECC bytes).
+                // Transfer size may be smaller than SECTOR_SIZE (e.g. 256
+                // bytes when SDH specifies 256-byte sectors).
+                let write_len = self.get_sector_size().min(self.data_length);
                 let off = self.wr_off;
                 if off + write_len <= DISK_SIZE {
                     self.disk_data[off..off + write_len]
