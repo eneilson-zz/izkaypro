@@ -133,7 +133,7 @@ impl HardDisk {
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
             if data.len() != DISK_SIZE {
-                println!("HDC: Warning: disk image size {} does not match expected {} bytes",
+                eprintln!("HDC: Warning: disk image size {} does not match expected {} bytes",
                     data.len(), DISK_SIZE);
             }
             // Pad or truncate to expected size to prevent out-of-bounds access
@@ -144,14 +144,14 @@ impl HardDisk {
             // A track with any non-zero byte has been formatted/written.
             self.track_formatted = self.detect_formatted_tracks();
             let formatted_count = self.track_formatted.iter().filter(|&&f| f).count();
-            println!("HDC: Loaded hard disk image: {} ({} bytes, {}/{} tracks formatted)",
+            eprintln!("HDC: Loaded hard disk image: {} ({} bytes, {}/{} tracks formatted)",
                 path, self.disk_data.len(), formatted_count, NUM_TRACKS);
             self.file = Some(file);
         } else {
             let mut file = File::create(path)?;
             self.disk_data = vec![0u8; DISK_SIZE];
             file.write_all(&self.disk_data)?;
-            println!("HDC: Created blank hard disk image: {}", path);
+            eprintln!("HDC: Created blank hard disk image: {}", path);
             // All tracks unformatted on a new image
             self.track_formatted = vec![false; NUM_TRACKS];
             // Re-open read/write for future seeks
@@ -192,12 +192,13 @@ impl HardDisk {
         ((self.cylinder_high as u16) << 8) | self.cylinder_low as u16
     }
 
+    /// Extract head number from SDH register (bits 2:0).
+    /// Both the 81-478c ROM and HDFMT put LUN=1 in bits 4:3
+    /// (via unit<<3) and the actual head number in bits 2:0.
+    /// This matches the standard WD1002-05 encoding and the
+    /// Java reference implementation (getHead() = sdh & 0x07).
     fn get_head(&self) -> u8 {
         self.sdh & 0x07
-    }
-
-    fn get_lun(&self) -> u8 {
-        (self.sdh >> 3) & 0x03
     }
 
     /// CHS → track index (cyl * HEADS + head).
@@ -206,6 +207,7 @@ impl HardDisk {
     }
 
     /// Check if the current track has been formatted (sector headers exist).
+    #[allow(dead_code)]
     fn is_track_formatted(&self) -> bool {
         let idx = self.get_track_index();
         idx < self.track_formatted.len() && self.track_formatted[idx]
@@ -245,7 +247,7 @@ impl HardDisk {
     /// for ~1-2 seconds while internal diagnostics run.
     pub fn sasi_reset(&mut self) {
         if self.trace {
-            println!("HDC: SASI reset asserted");
+            eprintln!("HDC: SASI reset asserted");
         }
         self.data_ix = 0;
         self.cur_cmd = 0;
@@ -283,41 +285,41 @@ impl HardDisk {
             2 => {
                 self.sector_count = value;
                 if self.trace {
-                    println!("HDC: Sector Count = {}", value);
+                    eprintln!("HDC: Sector Count = {}", value);
                 }
             }
             3 => {
                 self.sector_number = value;
                 if self.trace {
-                    println!("HDC: Sector Number = {}", value);
+                    eprintln!("HDC: Sector Number = {}", value);
                 }
             }
             4 => {
                 self.cylinder_low = value;
                 if self.trace {
-                    println!("HDC: Cylinder Low = 0x{:02X}", value);
+                    eprintln!("HDC: Cylinder Low = 0x{:02X}", value);
                 }
             }
             5 => {
                 self.cylinder_high = value;
                 if self.trace {
-                    println!("HDC: Cylinder High = 0x{:02X}", value);
+                    eprintln!("HDC: Cylinder High = 0x{:02X}", value);
                 }
             }
             6 => {
                 // SDH Register — drive/head select
-                let lun = (value >> 3) & 0x03;
+                // Bits 7:5 = sector size (101 = 512 bytes)
+                // Bits 4:3 = LUN (always 1 for Kaypro 10 HD)
+                // Bits 2:0 = head number
                 if self.trace {
                     let head = value & 0x07;
-                    println!("HDC: SDH = 0x{:02X} (LUN={}, head={})", value, lun, head);
+                    let lun = (value >> 3) & 0x03;
+                    eprintln!("HDC: SDH = 0x{:02X} (LUN={}, head={})", value, lun, head);
                 }
-                // Set READY when a valid LUN is selected (0 or 1).
-                // LUN 2 = hard disk 3 (not present), LUN 3 = floppy.
-                if lun <= 1 {
-                    self.status |= STS_READY;
-                } else {
-                    self.status &= !STS_READY;
-                }
+                // Always READY — single drive, all head values valid.
+                // The ROM's LUN 3 probe (SDH=0xB8) also gets READY,
+                // which tells the ROM the controller board is present.
+                self.status |= STS_READY;
                 self.sdh = value;
             }
             7 => {
@@ -356,7 +358,7 @@ impl HardDisk {
                 1 => "Error",
                 _ => "",
             };
-            println!("HDC: Read {} = 0x{:02X}", name, val);
+            eprintln!("HDC: Read {} = 0x{:02X}", name, val);
         }
         val
     }
@@ -374,14 +376,14 @@ impl HardDisk {
                     self.reset_pending = false;
                     self.status = STS_READY | STS_SEEK_DONE;
                     if self.trace {
-                        println!("HDC: Reset diagnostics complete, error=0x{:02X}, status=0x{:02X}",
+                        eprintln!("HDC: Reset diagnostics complete, error=0x{:02X}, status=0x{:02X}",
                             self.error, self.status);
                     }
                 }
             }
         }
         if self.trace {
-            println!("HDC: Read Status = 0x{:02X}", self.status);
+            eprintln!("HDC: Read Status = 0x{:02X}", self.status);
         }
         self.status
     }
@@ -394,25 +396,15 @@ impl HardDisk {
         // No disk image loaded — all commands fail (Java: driveFd == null)
         if !self.drive_present {
             if self.trace {
-                println!("HDC: Command 0x{:02X} rejected — no disk image loaded", self.cur_cmd);
-            }
-            self.set_error(ERR_ABORTED);
-            return;
-        }
-
-        // Validate LUN (accept 0 and 1 only)
-        let lun = self.get_lun();
-        if lun > 1 {
-            if self.trace {
-                println!("HDC: Command 0x{:02X} rejected — LUN {} not present", self.cur_cmd, lun);
+                eprintln!("HDC: Command 0x{:02X} rejected — no disk image loaded", self.cur_cmd);
             }
             self.set_error(ERR_ABORTED);
             return;
         }
 
         if self.trace {
-            println!("HDC: Command 0x{:02X} (LUN={}, C={}, H={}, S={}, N={})",
-                self.cur_cmd, lun, self.get_cyl(), self.get_head(),
+            eprintln!("HDC: Command 0x{:02X} (C={}, H={}, S={}, N={})",
+                self.cur_cmd, self.get_cyl(), self.get_head(),
                 self.sector_number, self.sector_count);
         }
 
@@ -425,7 +417,7 @@ impl HardDisk {
             0x90 => self.cmd_test(),
             _ => {
                 if self.trace {
-                    println!("HDC: Unknown command 0x{:02X}", self.cur_cmd);
+                    eprintln!("HDC: Unknown command 0x{:02X}", self.cur_cmd);
                 }
                 self.set_error(ERR_ABORTED);
             }
@@ -439,7 +431,7 @@ impl HardDisk {
         self.cylinder_high = 0;
         self.status |= STS_SEEK_DONE;
         if self.trace {
-            println!("HDC: RESTORE complete");
+            eprintln!("HDC: RESTORE complete");
         }
     }
 
@@ -448,14 +440,14 @@ impl HardDisk {
     fn cmd_seek(&mut self) {
         if !self.address_valid() {
             if self.trace {
-                println!("HDC: SEEK failed — address out of range");
+                eprintln!("HDC: SEEK failed — address out of range");
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
         }
         self.status |= STS_SEEK_DONE;
         if self.trace {
-            println!("HDC: SEEK complete — C={}, H={}", self.get_cyl(), self.get_head());
+            eprintln!("HDC: SEEK complete — C={}, H={}", self.get_cyl(), self.get_head());
         }
     }
 
@@ -464,7 +456,7 @@ impl HardDisk {
         self.error = DIAG_WD2797; // Same as reset: no floppy chip
         // Per spec: ERROR status bit is NOT set for diagnostic codes
         if self.trace {
-            println!("HDC: TEST complete, diag=0x{:02X}", self.error);
+            eprintln!("HDC: TEST complete, diag=0x{:02X}", self.error);
         }
     }
 
@@ -476,19 +468,21 @@ impl HardDisk {
         let off = self.get_off();
         if off + SECTOR_SIZE > DISK_SIZE {
             if self.trace {
-                println!("HDC: READ SECTOR failed — address out of range");
+                eprintln!("HDC: READ SECTOR failed — address out of range");
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
         }
 
-        // On real hardware, unformatted tracks have no sector headers.
-        // The controller scans for an IDAM matching the requested sector
-        // number and times out with ID NOT FOUND if none exist.
-        if !self.is_track_formatted() {
+        // On real hardware, unformatted sectors have no ID address marks.
+        // We detect this by checking if the sector data is all zeros —
+        // a written sector will have non-zero content. This allows the
+        // ROM to detect a blank disk (all zeros → ID NOT FOUND → floppy
+        // fallback) while letting HDFMT read back sectors it has written.
+        if self.disk_data[off..off + SECTOR_SIZE].iter().all(|&b| b == 0) {
             if self.trace {
-                println!("HDC: READ SECTOR failed — track not formatted (C={}, H={})",
-                    self.get_cyl(), self.get_head());
+                eprintln!("HDC: READ SECTOR failed — sector is blank (C={}, H={}, S={}, SDH=0x{:02X})",
+                    self.get_cyl(), self.get_head(), self.sector_number, self.sdh);
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
@@ -512,7 +506,7 @@ impl HardDisk {
         self.get_data();
 
         if self.trace {
-            println!("HDC: READ SECTOR — offset 0x{:X}, {} bytes", off, self.data_length);
+            eprintln!("HDC: READ SECTOR — offset 0x{:X}, {} bytes", off, self.data_length);
         }
     }
 
@@ -523,17 +517,7 @@ impl HardDisk {
         self.wr_off = self.get_off();
         if self.wr_off + SECTOR_SIZE > DISK_SIZE {
             if self.trace {
-                println!("HDC: WRITE SECTOR failed — address out of range");
-            }
-            self.set_error(ERR_ID_NOT_FOUND);
-            return;
-        }
-
-        // Cannot write to a track without sector headers
-        if !self.is_track_formatted() {
-            if self.trace {
-                println!("HDC: WRITE SECTOR failed — track not formatted (C={}, H={})",
-                    self.get_cyl(), self.get_head());
+                eprintln!("HDC: WRITE SECTOR failed — address out of range");
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
@@ -548,7 +532,7 @@ impl HardDisk {
         self.status |= STS_DRQ | STS_BUSY;
 
         if self.trace {
-            println!("HDC: WRITE SECTOR — offset 0x{:X}, expecting {} bytes",
+            eprintln!("HDC: WRITE SECTOR — offset 0x{:X}, expecting {} bytes",
                 self.wr_off, self.data_length);
         }
     }
@@ -558,19 +542,21 @@ impl HardDisk {
     fn cmd_format_track(&mut self) {
         if !self.address_valid() {
             if self.trace {
-                println!("HDC: FORMAT failed — address out of range");
+                eprintln!("HDC: FORMAT failed — address out of range");
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
         }
 
-        // Expect interleave table: 2 bytes per sector
-        self.data_length = SECTORS_PER_TRACK as usize * 2;
+        // HDFMT sends 512 bytes (two Z80 OTIRs of 256 bytes each):
+        // 34 bytes of interleave table followed by padding. The controller
+        // must absorb all bytes before completing. Java also uses 512.
+        self.data_length = SECTOR_SIZE;
         self.data_ix = 0;
         self.status |= STS_DRQ | STS_BUSY;
 
         if self.trace {
-            println!("HDC: FORMAT TRACK — C={}, H={}, expecting {} bytes interleave table",
+            eprintln!("HDC: FORMAT TRACK — C={}, H={}, expecting {} bytes interleave table",
                 self.get_cyl(), self.get_head(), self.data_length);
         }
     }
@@ -640,7 +626,7 @@ impl HardDisk {
                     self.disk_data[off..off + write_len]
                         .copy_from_slice(&self.data_buf[..write_len]);
                     if self.trace {
-                        println!("HDC: WRITE SECTOR committed {} bytes at offset 0x{:X}",
+                        eprintln!("HDC: WRITE SECTOR committed {} bytes at offset 0x{:X}",
                             write_len, off);
                     }
                     // Persist to backing file
@@ -668,33 +654,18 @@ impl HardDisk {
                 self.set_done();
             }
             0x50 => {
-                // FORMAT TRACK — interleave table received.
-                // The real controller writes sector headers (IDAMs) and
-                // fills data areas. We fill with 0xE5 and mark the track
-                // as formatted so subsequent READ/WRITE commands succeed.
-                let cyl = self.get_cyl() as usize;
-                let head = self.get_head() as usize;
-                let track_idx = cyl * HEADS as usize + head;
-                let track_off = track_idx * TRACK_SIZE;
-                let track_len = TRACK_SIZE;
-                if track_off + track_len <= DISK_SIZE {
-                    for b in &mut self.disk_data[track_off..track_off + track_len] {
-                        *b = 0xE5; // Standard CP/M fill byte
-                    }
-                    // Mark track as formatted (sector headers now exist)
-                    if track_idx < self.track_formatted.len() {
-                        self.track_formatted[track_idx] = true;
-                    }
-                    // Persist to backing file
-                    if let Some(ref mut f) = self.file {
-                        if f.seek(SeekFrom::Start(track_off as u64)).is_ok() {
-                            let _ = f.write_all(&self.disk_data[track_off..track_off + track_len]);
-                        }
-                    }
-                    if self.trace {
-                        println!("HDC: FORMAT TRACK complete — C={}, H={}", cyl, head);
-                    }
+                // FORMAT TRACK — interleave table received (data ignored).
+                // Mark the track as formatted so subsequent READ/WRITE
+                // commands succeed. Actual data is written by WRITE SECTOR.
+                // This matches the Java reference which just sets
+                // formatted=true and calls setDone().
+                let track_idx = self.get_track_index();
+                if track_idx < self.track_formatted.len() {
+                    self.track_formatted[track_idx] = true;
                 }
+                let formatted_count = self.track_formatted.iter().filter(|&&f| f).count();
+                eprintln!("HDC: FORMAT TRACK complete — C={}, H={}, SDH=0x{:02X}, track_idx={}, total_formatted={}",
+                    self.get_cyl(), self.get_head(), self.sdh, track_idx, formatted_count);
                 self.set_done();
             }
             _ => {

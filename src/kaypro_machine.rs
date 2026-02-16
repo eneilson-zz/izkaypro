@@ -520,9 +520,19 @@ impl Machine for KayproMachine {
             // only problematic write - it would unmap ROM mid-execution)
             0x14 => {
                 // Special case: 0x17 during ROM init is a video setup, not banking
-                // This value happens to have bit 7=0 but shouldn't unmap ROM
+                // This value happens to have bit 7=0 but shouldn't unmap ROM.
+                // However, we must still track bit 1 for SASI reset edge
+                // detection — the 81-478c ROM uses bit 1 transitions here
+                // as part of its HD controller detection sequence.
                 if value == 0x17 && self.is_rom_rank() {
-                    // Ignore this specific write - it's from ROM video init
+                    // Track bit 1 for SASI reset even when skipping banking
+                    let bit1 = value & 0x02 != 0;
+                    if self.port14_last_bit1 && !bit1 {
+                        if let Some(ref mut hd) = self.hard_disk {
+                            hd.sasi_reset();
+                        }
+                    }
+                    self.port14_last_bit1 = bit1;
                 } else {
                     self.update_system_bits_k484(value);
                 }

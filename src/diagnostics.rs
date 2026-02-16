@@ -494,6 +494,7 @@ pub struct BootTestConfig {
     pub disk_a: &'static str,
     pub disk_b: &'static str,
     pub side1_sector_base: u8,
+    pub has_hard_disk: bool,
 }
 
 /// Run boot tests for all supported Kaypro models.
@@ -510,6 +511,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_a: "disks/system/cpm22-rom149.img",
             disk_b: "disks/blank_disks/cpm22-rom149-blank.img",
             side1_sector_base: 10,
+            has_hard_disk: false,
         },
         BootTestConfig {
             name: "Kaypro 4/84 (81-292a)",
@@ -519,6 +521,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_a: "disks/system/cpm22g-rom292a.img",
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
+            has_hard_disk: false,
         },
         BootTestConfig {
             name: "Kaypro 4/84 TurboROM",
@@ -528,6 +531,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_a: "disks/system/k484_turborom_63k_boot.img",
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
+            has_hard_disk: false,
         },
         BootTestConfig {
             name: "KayPLUS 84",
@@ -537,6 +541,17 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_a: "disks/system/kayplus_boot.img",
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 0,
+            has_hard_disk: false,
+        },
+        BootTestConfig {
+            name: "Kaypro 10 (81-478c)",
+            rom_path: "roms/81-478c.rom",
+            video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
+            disk_format: crate::media::MediaFormat::DsDd,
+            disk_a: "disks/system/kaypro10_boot.img",
+            disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
+            side1_sector_base: 10,
+            has_hard_disk: true,
         },
     ];
 
@@ -554,8 +569,26 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         cfg.disk_a, cfg.disk_b, cfg.disk_format, cfg.side1_sector_base, false, false,
     );
     let mut machine = crate::kaypro_machine::KayproMachine::new(
-        cfg.rom_path, cfg.video_mode, fdc, false, false, false, false, false, false, false,
+        cfg.rom_path, cfg.video_mode, fdc, cfg.has_hard_disk,
+        false, false, false, false, false, false,
     );
+
+    // For Kaypro 10: create a blank HD image in a temp file.
+    // The ROM should detect no valid system on the blank HD and fall back
+    // to floppy boot. This is the critical boot path we're testing.
+    let hd_tmp_path;
+    if cfg.has_hard_disk {
+        let path = std::env::temp_dir()
+            .join(format!("izkaypro_boot_test_{}.hd", std::process::id()));
+        hd_tmp_path = Some(path.clone());
+        if let Some(ref mut hd) = machine.hard_disk {
+            hd.load_image(path.to_str().unwrap())
+                .expect("failed to init blank HD image");
+        }
+    } else {
+        hd_tmp_path = None;
+    }
+
     let mut cpu = Cpu::new_z80();
 
     let max_instructions: u64 = 200_000_000;
@@ -570,7 +603,7 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
     let mut fdc_motor_toggles: u32 = 0;
     let mut last_fdc_motor = false;
 
-    loop {
+    let result = loop {
         cpu.execute_instruction(&mut machine);
         counter += 1;
 
@@ -605,13 +638,13 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         }
         if !nmi_signaled && cpu.is_halted() {
             if prompt_found {
-                return TestResult {
+                break TestResult {
                     name: format!("Boot {}", cfg.name),
                     passed: true,
                     message: format!("Booted OK ({} instructions), stable at HALT", prompt_at),
                 };
             }
-            return TestResult {
+            break TestResult {
                 name: format!("Boot {}", cfg.name),
                 passed: false,
                 message: format!("HALT at PC=0x{:04X} after {} instructions",
@@ -637,11 +670,8 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
 
             if counter > prompt_at + post_prompt_budget {
                 let pc = cpu.registers().pc();
-                // After boot, a healthy CP/M system does at most a few motor
-                // on/off cycles (initial dir read). Repeated disk access (>4
-                // toggles) means the BIOS is stuck in a warm-boot loop.
                 if fdc_motor_toggles > 4 {
-                    return TestResult {
+                    break TestResult {
                         name: format!("Boot {}", cfg.name),
                         passed: false,
                         message: format!(
@@ -649,7 +679,7 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
                             fdc_motor_toggles, pc),
                     };
                 }
-                return TestResult {
+                break TestResult {
                     name: format!("Boot {}", cfg.name),
                     passed: true,
                     message: format!("Booted ({} instructions), stable ({} motor toggles)",
@@ -661,14 +691,21 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         if counter >= max_instructions {
             let vram_text = extract_vram_text(&machine, 5);
             let pc = cpu.registers().pc();
-            return TestResult {
+            break TestResult {
                 name: format!("Boot {}", cfg.name),
                 passed: false,
                 message: format!("Timed out after {} instructions at PC=0x{:04X} ROM={}. Screen: {}",
                     counter, pc, machine.is_rom_rank(), vram_text),
             };
         }
+    };
+
+    // Clean up temp HD image
+    if let Some(ref path) = hd_tmp_path {
+        let _ = std::fs::remove_file(path);
     }
+
+    result
 }
 
 /// Check if "A>" appears in VRAM (works for both CRTC and memory-mapped modes)
