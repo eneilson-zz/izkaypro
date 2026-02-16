@@ -45,6 +45,10 @@ struct Cli {
     #[arg(short = 'b', long, value_name = "FILE")]
     driveb: Option<String>,
 
+    /// Hard disk image file for Kaypro 10 (creates blank image if file doesn't exist)
+    #[arg(long, value_name = "FILE")]
+    hd: Option<String>,
+
     /// Custom ROM file (implies --model=custom)
     #[arg(long, value_name = "FILE")]
     rom: Option<String>,
@@ -186,6 +190,19 @@ fn main() {
         trace_hdc,
     );
     machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
+
+    // Load hard disk image if specified
+    if let Some(ref hd_path) = cli.hd {
+        if let Some(ref mut hd) = machine.hard_disk {
+            match hd.load_image(hd_path) {
+                Ok(()) => {},
+                Err(e) => eprintln!("Warning: Failed to load hard disk image '{}': {}", hd_path, e),
+            }
+        } else {
+            eprintln!("Warning: --hd specified but model doesn't support hard disk (use --model kaypro10)");
+        }
+    }
+
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);
 
@@ -300,6 +317,9 @@ fn main() {
                 match command {
                     Command::Quit => {
                         machine.floppy_controller.media_selected().flush_disk();
+                        if let Some(ref mut hd) = machine.hard_disk {
+                            hd.flush();
+                        }
                         done = true;
                     },
                     Command::Help => {
