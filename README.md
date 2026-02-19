@@ -4,7 +4,7 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs in a terminal window on Linux and OSX (no Windows support at this time). It supports multiple Kaypro models and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 28.
+This is a Kaypro emulator that runs in a terminal window on Linux, OSX, and FreeBSD (no Windows support at this time). It supports multiple Kaypro models and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 28.
 
 This is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
 
