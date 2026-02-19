@@ -7,6 +7,7 @@
 #   kaypro4_84  - Kaypro 2X/4/84 (DSDD, 81-292a ROM, SY6545 CRTC)
 #   turbo_rom   - Kaypro 4/84 with TurboROM 3.4 (DSDD, SY6545 CRTC)
 #   kayplus_84  - Kaypro 4/84 with KayPLUS BIOS (DSDD, SY6545 CRTC)
+#   kaypro10    - Kaypro 10 (DSDD floppy, 81-478c ROM, SY6545 CRTC)
 #   custom      - Use custom settings below
 
 # Custom settings (only used when model = "custom")
@@ -17,6 +18,7 @@
 # Disk images (optional, override model defaults)
 # disk_a = "disks/my_boot_disk.img"
 # disk_b = "disks/my_data_disk.img"
+# hard_disk = "disks/system/kaypro10.hd"  # Kaypro 10 HD image path
 
 
 # ============================================================================
@@ -37,6 +39,11 @@ model = "kaypro4_84"
 
 # --- KayPLUS 84 ---
 # model = "kayplus_84"
+
+# --- Kaypro 10 ---
+# model = "kaypro10"
+# disk_a = "disks/system/k10u-rld.img"
+# hard_disk = "disks/system/kaypro10.hd"
 
 # --- Custom configuration ---
 # model = "custom"

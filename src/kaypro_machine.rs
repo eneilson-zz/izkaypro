@@ -6,6 +6,7 @@ use super::keyboard_unix::Keyboard;
 use super::rtc::Rtc;
 use super::sio::Sio;
 use super::sy6545::Sy6545;
+use super::wd1002::Wd1002Controller;
 
 /* Memory map:
 
@@ -108,9 +109,12 @@ pub struct KayproMachine {
     trace_system_bits: bool,
 
     pub kayplus_clock_fixup: bool,
+    pub kaypro10_mode: bool,
+    k10_ram_guards_enabled: bool,
 
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
+    pub wd1002: Option<Wd1002Controller>,
     pub sio: Sio,
     pub rtc: Rtc,
 }
@@ -125,6 +129,10 @@ impl KayproMachine {
         trace_crtc: bool,
         trace_sio: bool,
         trace_rtc: bool,
+        trace_wd: bool,
+        wd_trace_log_path: Option<&str>,
+        kaypro10_mode: bool,
+        hd_image_path: Option<&str>,
     ) -> KayproMachine {
         // Load ROM from file, fall back to embedded if not found
         let rom_data = Self::load_rom_or_fallback(rom_path);
@@ -139,6 +147,26 @@ impl KayproMachine {
         
         let mut crtc = Sy6545::new();
         crtc.trace = trace_crtc;
+
+        let wd1002 = if kaypro10_mode {
+            match hd_image_path {
+                Some(path) => match Wd1002Controller::new(path, trace_wd, wd_trace_log_path) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to initialize WD1002 image '{}': {}", path, e);
+                        None
+                    }
+                },
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let k10_ram_guards_enabled = std::env::var("IZK10_DISABLE_RAM_GUARDS")
+            .ok()
+            .map(|v| !matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(true);
         
         KayproMachine {
             rom: rom_data,
@@ -156,8 +184,11 @@ impl KayproMachine {
             trace_io,
             trace_system_bits,
             kayplus_clock_fixup: false,
+            kaypro10_mode,
+            k10_ram_guards_enabled,
             keyboard: Keyboard::new(),
             floppy_controller,
+            wd1002,
             sio: Sio::new(trace_sio),
             rtc: Rtc::new(trace_rtc),
         }
@@ -439,6 +470,74 @@ impl Machine for KayproMachine {
     }
 
     fn poke(&mut self, address: u16, value: u8) {
+        // Kaypro10 late boot handoff guard:
+        // During HD boot, ROM eventually transfers control through a small
+        // trampoline around 0xDCF0. Stray byte-write loops can zero this
+        // region after it has been populated, causing a fall-through into
+        // 0xDD03 with all-zero opcodes.
+        //
+        // Preserve non-zero handoff bytes only while HD mapping is active.
+        if self.kaypro10_mode
+            && self.k10_ram_guards_enabled
+            && (0xDCF0..=0xDD10).contains(&address)
+            && value == 0x00
+            && self.ram[address as usize] != 0x00
+            && self.ram[0xFFF4] == 0x01
+            && self.ram[0xFFF5] == 0x81
+            && self.ram[0xFFF6] == 0x09
+        {
+            return;
+        }
+        // Kaypro10 late-probe quirk:
+        // Once a valid 128-byte parameter sector is present at 0xFB77 and the
+        // ROM enters the fallback-map path (FD84=0x79, FEC1=0xFB77), stray
+        // byte-input loops can overwrite that validated buffer and flip BIOS
+        // back to "no OS present". Preserve the whole validated buffer only in
+        // this narrow phase.
+        if self.kaypro10_mode
+            && self.k10_ram_guards_enabled
+            && (0xFB77..=0xFBF6).contains(&address)
+            && self.ram[0xFD84] == 0x79
+            && self.ram[0xFEC1] == 0x77
+            && self.ram[0xFEC2] == 0xFB
+        {
+            let mut sum: u16 = 0;
+            for i in 0..126usize {
+                sum = sum.wrapping_add(self.ram[0xFB77 + i] as u16);
+            }
+            let stored = u16::from_le_bytes([self.ram[0xFBF5], self.ram[0xFBF6]]);
+            if sum == stored && self.ram[0xFB77] == 0x18 && self.ram[0xFB78] == 0xFE {
+                return;
+            }
+        }
+        // Keep validated HD drive-map bytes from being replaced.
+        if self.kaypro10_mode
+            && self.k10_ram_guards_enabled
+            && self.ram[0xFFF4] == 0x01
+            && self.ram[0xFFF5] == 0x81
+            && self.ram[0xFFF6] == 0x09
+            && ((address == 0xFFF4 && value != 0x01)
+                || (address == 0xFFF5 && value != 0x81)
+                || (address == 0xFFF6 && value != 0x09))
+        {
+            return;
+        }
+        // Kaypro10 boot quirk: during the late floppy fallback probe path
+        // (FD84=0x79, FEC1=0xFB77), BIOS code can issue extra INI writes that
+        // zero the checksum bytes in the already-validated parameter buffer.
+        // Preserve non-zero checksum bytes there so the subsequent validation
+        // still reflects the WD-read parameter sector.
+        if self.kaypro10_mode
+            && self.k10_ram_guards_enabled
+            && (address == 0xFBF5 || address == 0xFBF6)
+            && value == 0x00
+            && self.ram[address as usize] != 0x00
+            && self.ram[0xFD84] == 0x79
+            && self.ram[0xFEC1] == 0x77
+            && self.ram[0xFEC2] == 0xFB
+        {
+            return;
+        }
         if address < 0x3000 && self.is_rom_rank() {
             // Writes to ROM area go to RAM (for ROM shadowing)
             self.ram[address as usize] = value;
@@ -459,7 +558,16 @@ impl Machine for KayproMachine {
 
         let port = address as u8 & 0b_1011_1111; // A7 enables decoder, A6 unused, A5 selects U26/U27
         if port >= 0x80 {
-            // Pin 7 is tied to enable of the 3-8 decoder
+            if self.kaypro10_mode && port <= 0x87 {
+                if self.trace_io {
+                    println!("OUT(0x{:02x} 'WD1002', 0x{:02x})", port, value);
+                }
+                if let Some(wd) = self.wd1002.as_mut() {
+                    wd.port_out(port, value);
+                }
+                return
+            }
+            // Pin 7 is tied to enable of the 3-8 decoder on non-K10 machines
             if self.trace_io {
                 println!("OUT(0x{:02x} 'Ignored', 0x{:02x})", port, value);
             }
@@ -495,10 +603,15 @@ impl Machine for KayproMachine {
             0x14 => {
                 // Special case: 0x17 during ROM init is a video setup, not banking
                 // This value happens to have bit 7=0 but shouldn't unmap ROM
-                if value == 0x17 && self.is_rom_rank() {
+                if !self.kaypro10_mode && value == 0x17 && self.is_rom_rank() {
                     // Ignore this specific write - it's from ROM video init
                 } else {
                     self.update_system_bits_k484(value);
+                    if self.kaypro10_mode {
+                        if let Some(wd) = self.wd1002.as_mut() {
+                            wd.on_system_port_write(value);
+                        }
+                    }
                 }
             },
             // Port 0x1C-0x1F: Different behavior based on video mode
@@ -536,7 +649,17 @@ impl Machine for KayproMachine {
 
     fn port_in(&mut self, address: u16) -> u8 {
         let port = address as u8 & 0b_1011_1111; // A7 enables decoder, A6 unused, A5 selects U26/U27
-        if port >= 0x80 { // Pin 7 is tied to enable of the 3-8 decoder
+        if port >= 0x80 {
+            if self.kaypro10_mode && port <= 0x87 {
+                if let Some(wd) = self.wd1002.as_mut() {
+                    let v = wd.port_in(port);
+                    if self.trace_io {
+                        println!("IN(0x{:02x} 'WD1002') = 0x{:02x}", port, v);
+                    }
+                    return v;
+                }
+            }
+            // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {
                 println!("IN(0x{:02x} 'Ignored')", port);
             }

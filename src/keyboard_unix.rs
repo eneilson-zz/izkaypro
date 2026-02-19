@@ -71,6 +71,11 @@ impl Keyboard {
         *self.key_buffer.first().unwrap_or(&0)
     }
 
+    /// Queue a keycode for delivery to the emulated keyboard input path.
+    pub fn inject_key(&mut self, key: u8) {
+        self.key_buffer.push(key & 0x7f);
+    }
+
     pub fn read_line(&mut self) -> Option<String> {
         use std::io::Write;
         

@@ -38,6 +38,9 @@ pub struct FloppyController {
     write_track_side: bool,   // Side latched at WRITE TRACK start
     write_track_head: u8,     // Head position latched at WRITE TRACK start
     multi_sector: bool,
+    transfer_drive: u8,
+    transfer_side: bool,
+    transfer_head: u8,
 
     // Index pulse simulation - counter for toggling index bit
     status_read_count: u32,
@@ -161,6 +164,9 @@ impl FloppyController {
             write_track_side: false,
             write_track_head: 0,
             multi_sector: false,
+            transfer_drive: 0,
+            transfer_side: false,
+            transfer_head: 0,
 
             status_read_count: 0,
             status_polls_without_data: 0,
@@ -221,6 +227,14 @@ impl FloppyController {
 
     pub fn media_selected(&mut self) -> &mut Media {
         &mut self.media[self.drive as usize]
+    }
+
+    pub fn media_selected_ref(&self) -> &Media {
+        &self.media[self.drive as usize]
+    }
+
+    pub fn current_side(&self) -> bool {
+        self.side_2
     }
 
     pub fn set_motor(&mut self, motor_on: bool) {
@@ -367,6 +381,9 @@ impl FloppyController {
             // READ SECTOR command, type II
             // 100mSEC0
             self.multi_sector = (command & 0x10) != 0;
+            self.transfer_drive = self.drive;
+            self.transfer_side = self.side_2;
+            self.transfer_head = self.head_position;
             let side_compare = (command & 0x02) != 0;
             let side_flag = if (command & 0x08) != 0 { 1u8 } else { 0u8 };
             if self.trace || self.trace_rw {
@@ -375,10 +392,10 @@ impl FloppyController {
                     self.multi_sector, side_compare, side_flag);
             }
 
-            let side_2 = self.side_2;
-            let track = self.head_position; // Use physical head position for disk access
+            let side_2 = self.transfer_side;
+            let track = self.transfer_head; // Latch physical head position at command start
             let sector = self.sector;
-            let (valid, index, last) =  self.media_selected().sector_index(side_2, track, sector);
+            let (valid, index, last) = self.media[self.transfer_drive as usize].sector_index(side_2, track, sector);
             if valid {
                 self.read_index = index;
                 self.read_last = last;
@@ -403,6 +420,9 @@ impl FloppyController {
             // WRITE SECTOR command, type II
             // 101mSECa
             self.multi_sector = (command & 0x10) != 0;
+            self.transfer_drive = self.drive;
+            self.transfer_side = self.side_2;
+            self.transfer_head = self.head_position;
             // a0 (bit 0): 0=normal data mark (FB), 1=deleted data mark (F8)
             // We accept both but don't distinguish in sector images
             if self.trace || self.trace_rw {
@@ -415,10 +435,10 @@ impl FloppyController {
                 return;
             }
 
-            let side_2 = self.side_2;
-            let track = self.head_position; // Use physical head position for disk access
+            let side_2 = self.transfer_side;
+            let track = self.transfer_head; // Latch physical head position at command start
             let sector = self.sector;
-            let (valid, index, last) =  self.media_selected().sector_index(side_2, track, sector);
+            let (valid, index, last) = self.media[self.transfer_drive as usize].sector_index(side_2, track, sector);
             if valid {
                 self.read_index = index;
                 self.read_last = last;
@@ -554,19 +574,11 @@ impl FloppyController {
         if self.status & FDCStatus::Busy as u8 != 0 {
             // Type II/III status: bit 1 = DRQ (data ready for CPU to read/write)
             if self.read_index < self.read_last || !self.data_buffer.is_empty() || self.write_track_active {
-                self.status_polls_without_data += 1;
-                if self.status_polls_without_data < 10 {
-                    status |= FDCStatus::DataRequest as u8;
-                } else {
-                    self.read_index = 0;
-                    self.read_last = 0;
-                    self.data_buffer.clear();
-                    self.multi_sector = false;
-                    self.status = FDCStatus::NoError as u8;
-                    self.status_polls_without_data = 0;
-                    status = self.status;
-                }
-            } else if self.read_address_countdown > 0 {
+                // Keep DRQ asserted while transfer data is pending.
+                // Real WD/FDC parts do not silently abort a command just
+                // because software polls status repeatedly before data I/O.
+                status |= FDCStatus::DataRequest as u8;
+            } else if self.read_address_countdown > 0 && !self.data_buffer.is_empty() {
                 status |= FDCStatus::DataRequest as u8;
             } else {
                 self.status &= !(FDCStatus::Busy as u8);
@@ -641,22 +653,22 @@ impl FloppyController {
             // Store byte
             let index = self.read_index;
             let data = self.data;
-            self.media_selected().write_byte(index, data);
+            self.media[self.transfer_drive as usize].write_byte(index, data);
             self.read_index += 1;
             self.raise_nmi = true;
             if self.read_index == self.read_last {
                 // We are done writing this sector
-                self.media_selected().flush_disk();
+                self.media[self.transfer_drive as usize].flush_disk();
                 if self.trace {
                     println!("FDC: Set data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
                 if self.multi_sector {
                     // Auto-increment sector and continue to next
                     self.sector += 1;
-                    let side_2 = self.side_2;
-                    let track = self.head_position;
+                    let side_2 = self.transfer_side;
+                    let track = self.transfer_head;
                     let sector = self.sector;
-                    let (valid, index, last) = self.media[self.drive as usize]
+                    let (valid, index, last) = self.media[self.transfer_drive as usize]
                         .sector_index(side_2, track, sector);
                     if valid {
                         self.read_index = index;
@@ -698,7 +710,7 @@ impl FloppyController {
         } else if self.read_index < self.read_last {
             // Prepare next byte
             let index = self.read_index;
-            self.data = self.media_selected().read_byte(index);
+            self.data = self.media[self.transfer_drive as usize].read_byte(index);
             self.read_index += 1;
             self.raise_nmi = true;
             if self.read_index == self.read_last {
@@ -707,28 +719,28 @@ impl FloppyController {
                     println!("FDC: Get data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
                 if self.trace || self.trace_rw {
-                    let track = self.head_position;
-                    let side = self.side_2;
-                    let sector_size = if let Some(geom) = self.media[self.drive as usize].track_geometry.get(&(track, side)) {
+                    let track = self.transfer_head;
+                    let side = self.transfer_side;
+                    let sector_size = if let Some(geom) = self.media[self.transfer_drive as usize].track_geometry.get(&(track, side)) {
                         128usize << (geom.n as usize)
                     } else {
-                        self.media[self.drive as usize].sector_size()
+                        self.media[self.transfer_drive as usize].sector_size()
                     };
                     let start = self.read_last.saturating_sub(sector_size);
-                    let b0 = self.media[self.drive as usize].read_byte(start);
-                    let b1 = self.media[self.drive as usize].read_byte(start + 1);
-                    let b2 = self.media[self.drive as usize].read_byte(start + 2);
-                    let b3 = self.media[self.drive as usize].read_byte(start + 3);
+                    let b0 = self.media[self.transfer_drive as usize].read_byte(start);
+                    let b1 = self.media[self.transfer_drive as usize].read_byte(start + 1);
+                    let b2 = self.media[self.transfer_drive as usize].read_byte(start + 2);
+                    let b3 = self.media[self.transfer_drive as usize].read_byte(start + 3);
                     println!("FDC: Verify read sector {}: first 4 bytes = {:02x} {:02x} {:02x} {:02x}",
                         self.sector, b0, b1, b2, b3);
                 }
                 if self.multi_sector {
                     // Auto-increment sector and continue to next
                     self.sector += 1;
-                    let side_2 = self.side_2;
-                    let track = self.head_position;
+                    let side_2 = self.transfer_side;
+                    let track = self.transfer_head;
                     let sector = self.sector;
-                    let (valid, index, last) = self.media[self.drive as usize]
+                    let (valid, index, last) = self.media[self.transfer_drive as usize]
                         .sector_index(side_2, track, sector);
                     if valid {
                         self.read_index = index;
@@ -758,6 +770,11 @@ impl FloppyController {
             && self.data_buffer.is_empty()
             && !self.write_track_active
         {
+            // If an error is already latched (RNF/CRC/etc.), do not synthesize
+            // extra pseudo-data interrupts; let BIOS observe command failure.
+            if self.status & (FDCStatus::SeekErrorOrRecordNotFound as u8 | FDCStatus::_CRCError as u8) != 0 {
+                return self.data;
+            }
             // Sector data exhausted but BUSY still set. Keep raising NMI
             // so the HALT/INI loop doesn't hang (the program needs a
             // completion NMI to exit the transfer). Retain the last data

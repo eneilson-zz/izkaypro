@@ -1,0 +1,149 @@
+;;reload.sub file for "U" production masters (i.e. End user reload version.)
+;;last modified 11-14-84 rwb
+^<^Z^[ + RELOAD FOR KAYPRO 10^>
+^<^|^|USER VERSION 1.1u WITH HARD DISK FORMAT FUNCTION^|^|^>
+^<^[=# CAUTION^|^>
+^<^|Please make sure that you have backed-up any files that you wish to keep.
+^|
+^|This version of the reload procedure will RE-FORMAT THE HARD DISK.
+^|
+^|This means any files now in existence on your hard disk WILL BE DESTROYED
+^|
+^|AND WILL NOT BE RETRIEVABLE BY ANY MEANS.
+^|
+^|When you are ready to continue, press the RETURN key.
+^|
+^|If you do not wish to continue, remove this diskette
+^|
+^|and press the RESET button.^G^?
+^|	-----------------------------------------------------------^|^>
+^<^Z^[ + ARE YOU SURE THAT YOU WANT TO FORMAT THE HARD DISK?
+^|
+^|REMEMBER THAT THIS WILL DESTROY ALL FILES PRESENTLY ON THE HARD DISK.
+^|
+^|ARE YOU SURE THAT YOU HAVE ANY FILES THAT YOU WISH TO KEEP BACKED-UP?
+^|
+^|When you are ready to continue, press the RETURN key.
+^|
+^|If you do not wish to continue, remove the diskette
+^|
+^|and press the RESET button.^G^?
+^|	-----------------------------------------------------------^|^>
+^<^Z^[ + ARE YOU REALLY SURE THAT YOU WANT TO FORMAT THE HARD DISK?
+^|
+^|REMEMBER THAT THIS WILL DESTROY ALL FILES PRESENTLY ON THE HARD DISK.
+^|
+^|ARE YOU SURE THAT YOU HAVE ANY FILES THAT YOU WISH TO KEEP BACKED-UP?
+^|
+^|When you are ready to continue, press the RETURN key.
+^|
+^|If you do not wish to continue, remove the diskette
+^|
+^|and press the RESET button.^G^?
+^|	-----------------------------------------------------------^|^>
+^<^Z^[ + ARE YOU POSITIVELY SURE THAT YOU WANT TO FORMAT THE HARD DISK?
+^|
+^|REMEMBER THAT THIS WILL DESTROY ALL FILES PRESENTLY ON THE HARD DISK.
+^|
+^|ARE YOU SURE THAT YOU HAVE ANY FILES THAT YOU WISH TO KEEP BACKED-UP?
+^|
+^|When you are ready to continue, press the RETURN key.
+^|
+^|If you do not wish to continue, remove the diskette
+^|
+^|and press the RESET button.^G^?
+^|	-----------------------------------------------------------^|^>
+USER 15
+;;check to see that reload disk #1 is in drive a:
+RCHECK RELOAD.1
+;;switch to user group 0.
+USER 0
+;;FORMAT THE HARD DISK WITH THE UNIVERSAL FORMAT PROGRAM
+HDFMT -M-F-A-E-Q
+;;SWITCH TO USER 1
+USER 1
+;;write the system tracks
+PUTSYSU
+;;find bad sectors and lock them out
+FINDBAD B:
+FINDBAD C:
+USER 0
+;;Pip pip to user 0
+PIP B:=A:PIP.COM[OV]
+;;copy user group 1 files
+PIP B:=A:*.*[OVG1]
+;;switch to user group 15
+USER 15
+;;copy rcheck to b:user 15
+PIP B:=A:RCHECK.COM[OV]
+^<^|^|Reload procedure for diskette #1 complete. 
+^|Place reload diskette #2 in floppy drive.
+^|When you are ready, press the RETURN key. ^G^?
+^|	----------------------------------------------^|^>
+;;Reset the system
+^C
+;;switch to user group 15
+USER 15
+;;check to see that reload diskette #2 is in floppy drive
+B:RCHECK RELOAD.2
+;;switch to user group 1
+USER 1
+;;copy user group 1 files from reload diskette #2
+B:PIP B:=A:*.*[ov]
+^<^|^|Reload procedure for diskette #2 complete.
+^|Place reload diskette #3 in floppy drive.
+^|When you are ready, press the RETURN key. ^G^?
+^|	-----------------------------------------------^|^>
+;;Reset the system
+^C
+;;Switch to user group 15
+USER 15
+;;check to see that reload diskette #3 is in floppy drive
+B:RCHECK RELOAD.3
+;;Switch to user group 3
+USER 3
+;;Copy user group 3 files from reload diskette #3
+B:PIP B:=A:*.*[ov]
+;;Switch to user group 10
+USER 10
+;;Copy user group 10 dbase files
+B:PIP B:=A:*.*[ov]
+^<^|^|Reload procedure for diskette #3 complete. 
+^|Place reload diskette #4 in floppy drive.
+^|When you are ready, press the RETURN key. ^G^?
+^|	------------------------------------------------^|^>
+;;Reset the system
+^C
+;;Switch to user group 15
+USER 15
+;;check to see that reload diskette #4 is in floppy drive
+B:RCHECK RELOAD.4
+;;Switch to user group 0
+USER 6
+;;Copy user group 0 files from reload diskette #4
+B:PIP B:=A:*.*[ov]
+^<^|^|Reload procedure for diskette #4 complete. 
+^|Place reload diskette #5 in floppy drive.
+^|When you are ready, press the RETURN key. ^G^?
+^|	------------------------------------------------^|^>
+;;Reset the system
+^C
+;;Switch to user group 15
+USER 15
+;;check to see that reload diskette #5 is in floppy drive
+B:RCHECK RELOAD.5
+;;Switch to user group 7
+USER 7
+;;Copy user group 7 files from reload diskette #5
+B:PIP B:=A:*.*[ov]
+;;Switch to user group 8
+USER 8
+;;Copy user group 8 files from reload diskette #5
+B:PIP B:=A:*.*[ov]
+^<^|^|Reload procedure for diskette #5 complete. 
+|
+;;Now cleanup the hard drive of reload programs
+USER 15
+ERA B:RCHECK.COM
+^<^|^|RELOAD PROCEDURE COMPLETE
+|

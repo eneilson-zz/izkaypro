@@ -26,6 +26,9 @@ pub enum KayproModel {
     /// Kaypro 4/84 with KayPLUS replacement BIOS - DSDD, SY6545 CRTC
     #[serde(rename = "kayplus_84")]
     KayPlus84,
+    /// Kaypro 10 - DSDD floppy + Winchester support, SY6545 CRTC
+    #[serde(rename = "kaypro10")]
+    Kaypro10,
     /// Custom configuration (use rom_file, disk_format, video_mode)
     #[serde(rename = "custom")]
     Custom,
@@ -113,6 +116,9 @@ pub struct Config {
     
     /// Disk image for drive B (optional, overrides model default)
     pub disk_b: Option<String>,
+
+    /// Hard disk image path (used by Kaypro 10)
+    pub hard_disk: Option<String>,
 }
 
 impl Default for Config {
@@ -125,6 +131,7 @@ impl Default for Config {
             side1_sector_base: None,
             disk_a: None,
             disk_b: None,
+            hard_disk: None,
         }
     }
 }
@@ -163,7 +170,14 @@ impl Config {
 
     /// Apply command-line overrides to the configuration.
     /// CLI arguments take priority over TOML config file settings.
-    pub fn apply_cli_overrides(&mut self, model: Option<&str>, rom: Option<&str>, drivea: Option<&str>, driveb: Option<&str>) {
+    pub fn apply_cli_overrides(
+        &mut self,
+        model: Option<&str>,
+        rom: Option<&str>,
+        drivea: Option<&str>,
+        driveb: Option<&str>,
+        hd: Option<&str>,
+    ) {
         if let Some(m) = model {
             self.model = match m {
                 "kaypro_ii" => KayproModel::KayproII,
@@ -171,6 +185,7 @@ impl Config {
                 "kaypro4_84" => KayproModel::Kaypro4_84,
                 "turbo_rom" => KayproModel::TurboRom,
                 "kayplus_84" => KayproModel::KayPlus84,
+                "kaypro10" => KayproModel::Kaypro10,
                 "custom" => KayproModel::Custom,
                 _ => {
                     eprintln!("Warning: Unknown model '{}', using default", m);
@@ -190,6 +205,9 @@ impl Config {
         if let Some(b) = driveb {
             self.disk_b = Some(b.to_string());
         }
+        if let Some(h) = hd {
+            self.hard_disk = Some(h.to_string());
+        }
     }
     
     /// Get the ROM file path for this configuration
@@ -200,6 +218,7 @@ impl Config {
             KayproModel::Kaypro4_84 => "roms/81-292a.rom",
             KayproModel::TurboRom => "roms/trom34.rom",
             KayproModel::KayPlus84 => "roms/kplus84.rom",
+            KayproModel::Kaypro10 => "roms/81-478c.rom",
             KayproModel::Custom => self.rom_file.as_deref().unwrap_or("roms/81-292a.rom"),
         }
     }
@@ -212,6 +231,7 @@ impl Config {
             KayproModel::Kaypro4_84 => VideoMode::Sy6545Crtc,
             KayproModel::TurboRom => VideoMode::Sy6545Crtc,
             KayproModel::KayPlus84 => VideoMode::Sy6545Crtc,
+            KayproModel::Kaypro10 => VideoMode::Sy6545Crtc,
             KayproModel::Custom => self.video_mode.into(),
         }
     }
@@ -224,6 +244,7 @@ impl Config {
             KayproModel::Kaypro4_84 => MediaFormat::DsDd,
             KayproModel::TurboRom => MediaFormat::DsDd,
             KayproModel::KayPlus84 => MediaFormat::DsDd,
+            KayproModel::Kaypro10 => MediaFormat::DsDd,
             KayproModel::Custom => self.disk_format.into(),
         }
     }
@@ -247,6 +268,7 @@ impl Config {
             KayproModel::Kaypro4_84 => "disks/system/cpm22g-rom292a.img",
             KayproModel::TurboRom => "disks/system/k484_turborom_63k_boot.img",
             KayproModel::KayPlus84 => "disks/system/kayplus_boot.img",
+            KayproModel::Kaypro10 => "disks/system/k10u-rld.img",
             KayproModel::Custom => self.disk_a.as_deref().unwrap_or("disks/system/k484-cpm22f-boot.img"),
         }
     }
@@ -259,8 +281,24 @@ impl Config {
             KayproModel::Kaypro4_84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::TurboRom => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::KayPlus84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::Kaypro10 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/blank_disks/cpm22-kaypro4-blank.img"),
         }
+    }
+
+    /// Get the default hard disk image path for this configuration
+    pub fn get_default_hard_disk(&self) -> &str {
+        match self.model {
+            KayproModel::Kaypro10 => "disks/system/kaypro10.hd",
+            _ => "disks/system/kaypro10.hd",
+        }
+    }
+
+    /// Get effective hard disk image path for this configuration.
+    pub fn get_hard_disk_path(&self) -> &str {
+        self.hard_disk
+            .as_deref()
+            .unwrap_or(self.get_default_hard_disk())
     }
     
     /// Get a description of this configuration
@@ -271,6 +309,10 @@ impl Config {
             KayproModel::Kaypro4_84 => "Kaypro 2X/4/84 (DSDD, 81-292a ROM)".to_string(),
             KayproModel::TurboRom => "Kaypro 4/84 TurboROM 3.4 (DSDD)".to_string(),
             KayproModel::KayPlus84 => "Kaypro 4/84 KayPLUS (DSDD)".to_string(),
+            KayproModel::Kaypro10 => format!(
+                "Kaypro 10 (DSDD, 81-478c ROM, HD: {})",
+                self.get_hard_disk_path()
+            ),
             KayproModel::Custom => format!("Custom ({})", self.get_rom_path()),
         }
     }
@@ -283,6 +325,7 @@ impl Config {
             KayproModel::Kaypro4_84 => "Kaypro 4-84",
             KayproModel::TurboRom => "Kaypro 4-84 TurboROM",
             KayproModel::KayPlus84 => "Kaypro 4-84 KayPLUS",
+            KayproModel::Kaypro10 => "Kaypro 10",
             KayproModel::Custom => "Custom Kaypro",
         }
     }
