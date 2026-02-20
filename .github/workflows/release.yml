@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p staging/izkaypro
+          cp target/${{ matrix.target }}/release/izkaypro staging/izkaypro/
+          cp -r disks roms staging/izkaypro/
+          cp izkaypro.toml README.md LICENSE staging/izkaypro/
+          cd staging
+          tar czf ../izkaypro-${{ github.ref_name }}-${{ matrix.target }}.tar.gz izkaypro
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging/izkaypro -Force
+          Copy-Item target/${{ matrix.target }}/release/izkaypro.exe staging/izkaypro/
+          Copy-Item -Recurse disks staging/izkaypro/
+          Copy-Item -Recurse roms staging/izkaypro/
+          Copy-Item izkaypro.toml, README.md, LICENSE staging/izkaypro/
+          Compress-Archive -Path staging/izkaypro -DestinationPath izkaypro-${{ github.ref_name }}-${{ matrix.target }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: izkaypro-${{ matrix.target }}
+          path: izkaypro-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: izkaypro-*
+          generate_release_notes: true

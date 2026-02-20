@@ -5,7 +5,10 @@ use std::time::{Duration, Instant};
 mod config;
 mod kaypro_machine;
 mod floppy_controller;
+#[cfg(unix)]
 mod keyboard_unix;
+#[cfg(windows)]
+mod keyboard_win;
 mod media;
 mod screen;
 mod rtc;
@@ -19,7 +22,10 @@ use self::config::{Config, KayproModel};
 use self::kaypro_machine::KayproMachine;
 use self::floppy_controller::FloppyController;
 use self::screen::Screen;
+#[cfg(unix)]
 use self::keyboard_unix::Command;
+#[cfg(windows)]
+use self::keyboard_win::Command;
 
 #[derive(Parser)]
 #[command(

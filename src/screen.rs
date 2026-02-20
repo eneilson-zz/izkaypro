@@ -61,6 +61,22 @@ impl Screen {
     }
 
     pub fn init(&self) {
+        // On Windows, enable VT processing so ANSI escape sequences work
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::*;
+            unsafe {
+                let stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+                let mut mode: u32 = 0;
+                if GetConsoleMode(stdout_handle, &mut mode) != 0 {
+                    let _ = SetConsoleMode(
+                        stdout_handle,
+                        mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT,
+                    );
+                }
+            }
+        }
+
         if self.in_place {
             for _ in 0..28 {
                 println!();
