@@ -116,6 +116,10 @@ struct Cli {
     /// Run headless boot tests for all Kaypro models then exit
     #[arg(long)]
     boot_test: bool,
+
+    /// Trace TurboROM+HD boot sequence (debug diagnostic)
+    #[arg(long, hide = true)]
+    trace_turborom_hd: bool,
 }
 
 fn main() {
@@ -153,7 +157,13 @@ fn main() {
     let trace_hdc = cli.hdc_trace || cli.trace_all;
     let run_diag = cli.diagnostics;
     let run_boot_test = cli.boot_test;
-    let has_hard_disk = config.model == KayproModel::Kaypro10;
+    // Kaypro 10: controller always present (soldered to motherboard).
+    // TurboROM: controller only present when --hd is specified (add-on card).
+    // Without the controller, TurboROM loads the disk-based TURBO-BIOS;
+    // with it, TurboROM activates its ROM-resident BIOS which needs a
+    // formatted HD parameter sector to operate correctly.
+    let has_hard_disk = config.model == KayproModel::Kaypro10
+        || (config.model == KayproModel::TurboRom && cli.hd.is_some());
 
     let any_trace = trace_io
         || trace_cpu
@@ -213,6 +223,12 @@ fn main() {
         diagnostics::print_results(&results);
         let all_passed = results.iter().all(|r| r.passed);
         std::process::exit(if all_passed { 0 } else { 1 });
+    }
+
+    // Trace TurboROM+HD boot if requested
+    if cli.trace_turborom_hd {
+        diagnostics::trace_turborom_hd_boot();
+        return;
     }
 
     // Run diagnostics if requested

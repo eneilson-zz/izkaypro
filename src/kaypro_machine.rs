@@ -269,16 +269,23 @@ impl KayproMachine {
         }
 
         // Drive select (port 0x14: bits 1-0)
-        // 81-232 uses: A=01, B=10
-        // 81-292a uses: A=10 (bit 1), B=01 (bit 0), both=11, neither=00
-        // The ROM writes 0xDF (11) for init, then 0xDE (10) for drive A
-        let drive_sel = bits & 0x03;
-        let drive: Option<u8> = match drive_sel {
-            0x02 => Some(0), // 81-292a: A=10 (bit 1 set, bit 0 clear)
-            0x01 => Some(1), // 81-292a: B=01 (bit 0 set, bit 1 clear)
-            0x03 => Some(0), // Both bits = default to A (initialization)
-            0x00 => None,    // No drive selected
-            _ => None,
+        // On Kaypro 10 (HD present): bit 1 is SASI /MR (reset), only bit 0
+        // selects the drive: 0=A, 1=B.
+        // On Kaypro 4/84 (no HD): bits 1-0 together select the drive:
+        //   81-292a: A=10, B=01, both=11 (init→A), neither=00 (none)
+        let drive: Option<u8> = if self.hard_disk.is_some() {
+            // Kaypro 10 encoding: bit 0 only
+            Some(bits & 0x01) // 0=A, 1=B
+        } else {
+            // Standard 4/84 encoding: bits 1-0
+            let drive_sel = bits & 0x03;
+            match drive_sel {
+                0x02 => Some(0), // A=10 (bit 1 set, bit 0 clear)
+                0x01 => Some(1), // B=01 (bit 0 set, bit 1 clear)
+                0x03 => Some(0), // Both bits = default to A (initialization)
+                0x00 => None,    // No drive selected
+                _ => None,
+            }
         };
 
         if let Some(d) = drive {
@@ -481,8 +488,9 @@ impl Machine for KayproMachine {
         if port >= 0x80 && port <= 0x87 {
             if let Some(ref mut hd) = self.hard_disk {
                 hd.write_register(port, value);
+                return;
             }
-            return;
+            // Fall through to generic >= 0x80 handler when no HD controller
         }
         if port >= 0x80 {
             // Pin 7 is tied to enable of the 3-8 decoder
@@ -578,7 +586,9 @@ impl Machine for KayproMachine {
             if let Some(ref mut hd) = self.hard_disk {
                 return hd.read_register(port);
             }
-            return 0xFF;
+            // Fall through to generic >= 0x80 handler (returns 0x00)
+            // when no HD controller — returning 0xFF would set READY in
+            // the status byte, causing TurboROM to falsely detect an HD.
         }
         if port >= 0x80 { // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {

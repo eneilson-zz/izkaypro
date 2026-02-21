@@ -77,6 +77,16 @@ pub struct HardDisk {
     reset_pending: bool,
     busy_countdown: u16,
 
+    // INTRQ state — per spec, asserted on command completion, cleared
+    // when host reads Status register or writes a new command.
+    // Not wired to the Z80 interrupt chain in the Kaypro, but tracked
+    // for strict spec compliance.
+    intrq: bool,
+
+    // Which LUN (drive select, SDH bits 4:3) is the connected drive.
+    // Only this LUN reports READY. Default 1 for Kaypro 10/TurboROM.
+    configured_lun: u8,
+
     // Data transfer buffer and state
     data_buf: Vec<u8>,
     data_length: usize,
@@ -116,6 +126,8 @@ impl HardDisk {
             precomp: 0,
             reset_pending: false,
             busy_countdown: 0,
+            intrq: false,
+            configured_lun: 1,
             data_buf: vec![0u8; 1024 + 4], // max sector size (1024) + 4 ECC bytes
             data_length: SECTOR_SIZE,
             data_ix: 0,
@@ -206,8 +218,12 @@ impl HardDisk {
         self.get_cyl() as usize * HEADS as usize + self.get_head() as usize
     }
 
+    /// Extract LUN (drive select) from SDH register (bits 4:3).
+    fn get_lun(&self) -> u8 {
+        (self.sdh >> 3) & 0x03
+    }
+
     /// Check if the current track has been formatted (sector headers exist).
-    #[allow(dead_code)]
     fn is_track_formatted(&self) -> bool {
         let idx = self.get_track_index();
         idx < self.track_formatted.len() && self.track_formatted[idx]
@@ -222,21 +238,35 @@ impl HardDisk {
             * SECTOR_SIZE
     }
 
-    /// Check if the current CHS address is within disk capacity.
-    fn address_valid(&self) -> bool {
-        self.get_off() + SECTOR_SIZE <= DISK_SIZE
-    }
-
     // --- Status helpers (bit-level mutation like real hardware) ---
 
     fn set_done(&mut self) {
         self.status &= !(STS_DRQ | STS_BUSY);
+        self.intrq = true;
     }
 
     fn set_error(&mut self, err: u8) {
         self.error |= err;
         self.status |= STS_ERROR;
         self.set_done();
+    }
+
+    /// Advance CHS to the next sector for multi-sector operations.
+    /// Wraps sector → head → cylinder per WD spec.
+    fn advance_sector(&mut self) {
+        self.sector_number = self.sector_number.wrapping_add(1);
+        if self.sector_number >= SECTORS_PER_TRACK {
+            self.sector_number = 0;
+            let mut head = self.get_head() + 1;
+            if head >= HEADS {
+                head = 0;
+                let cyl = self.get_cyl() + 1;
+                self.cylinder_low = cyl as u8;
+                self.cylinder_high = (cyl >> 8) as u8;
+            }
+            // Update head in SDH register (bits 2:0)
+            self.sdh = (self.sdh & 0xF8) | (head & 0x07);
+        }
     }
 
     // --- Reset ---
@@ -251,6 +281,7 @@ impl HardDisk {
         }
         self.data_ix = 0;
         self.cur_cmd = 0;
+        self.intrq = false;
         // Clear all task file registers
         self.data = 0;
         self.error = 0;
@@ -308,25 +339,34 @@ impl HardDisk {
             }
             6 => {
                 // SDH Register — drive/head select
-                // Bits 7:5 = sector size (101 = 512 bytes)
-                // Bits 4:3 = LUN (always 1 for Kaypro 10 HD)
+                // Bit 7 = ECC/CRC mode
+                // Bits 6:5 = sector size
+                // Bits 4:3 = LUN (drive select)
                 // Bits 2:0 = head number
+                self.sdh = value;
+                let lun = (value >> 3) & 0x03;
+                // Per spec: READY reflects whether the selected drive is
+                // present and has motor up to speed. Only the configured
+                // LUN (default 1 for Kaypro) reports READY.
+                if self.drive_present && lun == self.configured_lun {
+                    self.status |= STS_READY;
+                } else {
+                    self.status &= !STS_READY;
+                }
                 if self.trace {
                     let head = value & 0x07;
-                    let lun = (value >> 3) & 0x03;
-                    eprintln!("HDC: SDH = 0x{:02X} (LUN={}, head={})", value, lun, head);
+                    eprintln!("HDC: SDH = 0x{:02X} (LUN={}, head={}, ready={})",
+                        value, lun, head, self.status & STS_READY != 0);
                 }
-                // Always READY — single drive, all head values valid.
-                // The ROM's LUN 3 probe (SDH=0xB8) also gets READY,
-                // which tells the ROM the controller board is present.
-                self.status |= STS_READY;
-                self.sdh = value;
             }
             7 => {
-                // Command Register — clear error state and dispatch
+                // Command Register — per spec: writing a command sets BUSY,
+                // clears SEEK_DONE, clears INTRQ, and clears error state.
                 self.cur_cmd = value;
-                self.status &= !STS_ERROR;
+                self.status |= STS_BUSY;
+                self.status &= !(STS_ERROR | STS_SEEK_DONE);
                 self.error = 0;
+                self.intrq = false;
                 self.process_cmd();
             }
             _ => {}
@@ -364,6 +404,9 @@ impl HardDisk {
     }
 
     fn read_status(&mut self) -> u8 {
+        // Per spec: reading Status register clears INTRQ
+        self.intrq = false;
+
         // Handle busy countdown from SASI reset diagnostics
         if self.busy_countdown > 0 {
             self.busy_countdown -= 1;
@@ -374,7 +417,11 @@ impl HardDisk {
                     // status bit is NOT set (even for non-zero codes).
                     self.error = DIAG_WD2797; // 0x01: no WD2797 floppy chip
                     self.reset_pending = false;
-                    self.status = STS_READY | STS_SEEK_DONE;
+                    // Only set READY if the configured LUN was selected
+                    self.status = STS_SEEK_DONE;
+                    if self.drive_present && self.get_lun() == self.configured_lun {
+                        self.status |= STS_READY;
+                    }
                     if self.trace {
                         eprintln!("HDC: Reset diagnostics complete, error=0x{:02X}, status=0x{:02X}",
                             self.error, self.status);
@@ -393,10 +440,26 @@ impl HardDisk {
     fn process_cmd(&mut self) {
         let cmd_type = self.cur_cmd & 0xF0;
 
+        // TEST (0x90) runs internal diagnostics regardless of drive state
+        if cmd_type == 0x90 {
+            self.cmd_test();
+            return;
+        }
+
         // No disk image loaded — all commands fail (Java: driveFd == null)
         if !self.drive_present {
             if self.trace {
                 eprintln!("HDC: Command 0x{:02X} rejected — no disk image loaded", self.cur_cmd);
+            }
+            self.set_error(ERR_ABORTED);
+            return;
+        }
+
+        // Per spec: commands abort if drive not ready (wrong LUN selected)
+        if self.get_lun() != self.configured_lun {
+            if self.trace {
+                eprintln!("HDC: Command 0x{:02X} rejected — drive not ready (LUN {} != {})",
+                    self.cur_cmd, self.get_lun(), self.configured_lun);
             }
             self.set_error(ERR_ABORTED);
             return;
@@ -414,7 +477,6 @@ impl HardDisk {
             0x30 => self.cmd_write_sector(),
             0x50 => self.cmd_format_track(),
             0x70 => self.cmd_seek(),
-            0x90 => self.cmd_test(),
             _ => {
                 if self.trace {
                     eprintln!("HDC: Unknown command 0x{:02X}", self.cur_cmd);
@@ -425,10 +487,12 @@ impl HardDisk {
     }
 
     /// RESTORE (0x1r): Recalibrate — move heads to cylinder 0.
-    /// Per spec and Java: immediate completion, sets SEEK_DONE.
+    /// Per spec: steps toward track 0, sets SEEK_DONE on completion.
+    /// Bits 3:0 encode stepping rate (ignored in emulation).
     fn cmd_restore(&mut self) {
         self.cylinder_low = 0;
         self.cylinder_high = 0;
+        self.status &= !STS_BUSY;
         self.status |= STS_SEEK_DONE;
         if self.trace {
             eprintln!("HDC: RESTORE complete");
@@ -436,25 +500,34 @@ impl HardDisk {
     }
 
     /// SEEK (0x7r): Position heads at cylinder specified in task file.
-    /// Per spec and Java: immediate completion, sets SEEK_DONE.
+    /// Per spec: validates cylinder/head (not sector), sets SEEK_DONE.
+    /// Bits 3:0 encode stepping rate (ignored in emulation).
     fn cmd_seek(&mut self) {
-        if !self.address_valid() {
+        // Per spec: SEEK validates cylinder/head only, not sector
+        let cyl = self.get_cyl();
+        let head = self.get_head();
+        if cyl >= CYLINDERS || head >= HEADS {
             if self.trace {
-                eprintln!("HDC: SEEK failed — address out of range");
+                eprintln!("HDC: SEEK failed — C={} H={} out of range", cyl, head);
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
         }
+        self.status &= !STS_BUSY;
         self.status |= STS_SEEK_DONE;
         if self.trace {
-            eprintln!("HDC: SEEK complete — C={}, H={}", self.get_cyl(), self.get_head());
+            eprintln!("HDC: SEEK complete — C={}, H={}", cyl, head);
         }
     }
 
     /// TEST (0x90): Internal diagnostics. Immediate pass.
+    /// Per spec: runs self-test, reports result in error register
+    /// without setting the ERROR status bit. Sets INTRQ on completion.
     fn cmd_test(&mut self) {
         self.error = DIAG_WD2797; // Same as reset: no floppy chip
         // Per spec: ERROR status bit is NOT set for diagnostic codes
+        self.status &= !STS_BUSY;
+        self.intrq = true;
         if self.trace {
             eprintln!("HDC: TEST complete, diag=0x{:02X}", self.error);
         }
@@ -475,25 +548,29 @@ impl HardDisk {
             return;
         }
 
-        // On real hardware, unformatted sectors have no ID address marks.
-        // We detect this by checking if the sector data is all zeros —
-        // a written sector will have non-zero content. This allows the
-        // ROM to detect a blank disk (all zeros → ID NOT FOUND → floppy
-        // fallback) while letting HDFMT read back sectors it has written.
-        if self.disk_data[off..off + SECTOR_SIZE].iter().all(|&b| b == 0) {
+        // Per WD spec: ID NOT FOUND means the sector header was not found
+        // on the track — i.e., the track hasn't been formatted. Check the
+        // per-track formatted state rather than the sector data content.
+        if !self.is_track_formatted() {
             if self.trace {
-                eprintln!("HDC: READ SECTOR failed — sector is blank (C={}, H={}, S={}, SDH=0x{:02X})",
+                eprintln!("HDC: READ SECTOR failed — track not formatted (C={}, H={}, S={}, SDH=0x{:02X})",
                     self.get_cyl(), self.get_head(), self.sector_number, self.sdh);
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
         }
 
-        // Copy sector data into transfer buffer. Transfer size comes from
-        // SDH bits 6:5 (256 or 512 for Kaypro). Disk image always stores
-        // 512-byte physical sectors; we transfer only xfer_size bytes.
+        // Copy sector data into transfer buffer. Disk image stores
+        // 512-byte physical sectors. For smaller SDH sector sizes,
+        // transfer only the requested amount. For larger sizes,
+        // zero-fill beyond the physical sector boundary.
         let copy_len = xfer_size.min(SECTOR_SIZE);
         self.data_buf[..copy_len].copy_from_slice(&self.disk_data[off..off + copy_len]);
+        if xfer_size > SECTOR_SIZE {
+            for i in SECTOR_SIZE..xfer_size {
+                self.data_buf[i] = 0;
+            }
+        }
         self.data_length = xfer_size;
 
         // LONG mode: append 4 fake ECC bytes
@@ -506,7 +583,8 @@ impl HardDisk {
         }
 
         self.data_ix = 0;
-        // Prime first byte and set DRQ (PIO mode: DRQ set, BUSY cleared)
+        // Per spec PIO READ: BUSY cleared, DRQ set when buffer ready
+        self.status &= !STS_BUSY;
         self.get_data();
 
         if self.trace {
@@ -527,14 +605,24 @@ impl HardDisk {
             return;
         }
 
+        // Per WD spec: writing to an unformatted track fails with ID NOT FOUND
+        if !self.is_track_formatted() {
+            if self.trace {
+                eprintln!("HDC: WRITE SECTOR failed — track not formatted (C={}, H={}, S={})",
+                    self.get_cyl(), self.get_head(), self.sector_number);
+            }
+            self.set_error(ERR_ID_NOT_FOUND);
+            return;
+        }
+
         // Transfer size comes from SDH bits 6:5 (256 or 512 for Kaypro)
         self.data_length = self.get_sector_size();
         if self.cur_cmd & CMD_LONG != 0 {
             self.data_length += 4;
         }
         self.data_ix = 0;
-        // Set DRQ and BUSY — host must fill the buffer
-        self.status |= STS_DRQ | STS_BUSY;
+        // Per spec PIO WRITE: DRQ set to request data from host, BUSY remains
+        self.status |= STS_DRQ;
 
         if self.trace {
             eprintln!("HDC: WRITE SECTOR — offset 0x{:X}, expecting {} bytes",
@@ -555,11 +643,16 @@ impl HardDisk {
     }
 
     /// FORMAT TRACK (0x50): Format a track using interleave table from host.
-    /// Host writes 2 bytes per sector (bad block byte + logical sector number).
+    /// Per spec: host writes 2 bytes per sector (bad block flag + logical
+    /// sector number). The Sector Count register specifies sectors per track.
+    /// The total transfer size matches the SDH sector size encoding.
     fn cmd_format_track(&mut self) {
-        if !self.address_valid() {
+        // Validate cylinder/head (sector number is not relevant for FORMAT)
+        let cyl = self.get_cyl();
+        let head = self.get_head();
+        if cyl >= CYLINDERS || head >= HEADS {
             if self.trace {
-                eprintln!("HDC: FORMAT failed — address out of range");
+                eprintln!("HDC: FORMAT failed — C={} H={} out of range", cyl, head);
             }
             self.set_error(ERR_ID_NOT_FOUND);
             return;
@@ -571,11 +664,12 @@ impl HardDisk {
         // (256-byte, 1 OTIR). We must match the expected length.
         self.data_length = self.get_sector_size();
         self.data_ix = 0;
-        self.status |= STS_DRQ | STS_BUSY;
+        // Per spec: DRQ set to receive interleave table, BUSY remains
+        self.status |= STS_DRQ;
 
         if self.trace {
-            eprintln!("HDC: FORMAT TRACK — C={}, H={}, SDH=0x{:02X}, expecting {} bytes",
-                self.get_cyl(), self.get_head(), self.sdh, self.data_length);
+            eprintln!("HDC: FORMAT TRACK — C={}, H={}, SDH=0x{:02X}, sectors={}, expecting {} bytes",
+                cyl, head, self.sdh, self.sector_count, self.data_length);
         }
     }
 
@@ -597,13 +691,11 @@ impl HardDisk {
 
         if self.cur_cmd & CMD_MULTI_SEC != 0 && self.sector_count > 0 {
             self.sector_count -= 1;
-            self.sector_number = self.sector_number.wrapping_add(1);
-            if self.sector_number >= SECTORS_PER_TRACK {
-                self.sector_number = 0;
-            }
+            self.advance_sector();
             if self.sector_count > 0 {
-                // Continue with next sector
-                self.process_cmd();
+                // Continue with next sector — re-enter READ with BUSY
+                self.status |= STS_BUSY;
+                self.cmd_read_sector();
                 return;
             }
         }
@@ -636,11 +728,11 @@ impl HardDisk {
         let cmd_type = self.cur_cmd & 0xF0;
         match cmd_type {
             0x30 => {
-                // WRITE SECTOR — commit buffer to disk image
-                // Only write the actual sector data (not ECC bytes).
-                // Transfer size may be smaller than SECTOR_SIZE (e.g. 256
-                // bytes when SDH specifies 256-byte sectors).
-                let write_len = self.get_sector_size().min(self.data_length);
+                // WRITE SECTOR — commit buffer to disk image.
+                // Only write actual sector data (not ECC bytes in LONG mode).
+                // Write at most SECTOR_SIZE bytes to the physical sector.
+                let sector_size = self.get_sector_size();
+                let write_len = sector_size.min(SECTOR_SIZE);
                 let off = self.wr_off;
                 if off + write_len <= DISK_SIZE {
                     self.disk_data[off..off + write_len]
@@ -660,32 +752,31 @@ impl HardDisk {
                 self.data_ix = 0;
                 if self.cur_cmd & CMD_MULTI_SEC != 0 && self.sector_count > 0 {
                     self.sector_count -= 1;
-                    self.sector_number = self.sector_number.wrapping_add(1);
-                    if self.sector_number >= SECTORS_PER_TRACK {
-                        self.sector_number = 0;
-                    }
+                    self.advance_sector();
                     if self.sector_count > 0 {
                         // Re-latch offset for next sector and request more data
                         self.wr_off = self.get_off();
-                        self.status |= STS_DRQ | STS_BUSY;
+                        self.status |= STS_DRQ;
                         return;
                     }
                 }
                 self.set_done();
             }
             0x50 => {
-                // FORMAT TRACK — interleave table received (data ignored).
+                // FORMAT TRACK — interleave table received.
+                // Parse bad block flags from the interleave data (2 bytes
+                // per sector: bad_block_flag, logical_sector_number).
                 // Mark the track as formatted so subsequent READ/WRITE
-                // commands succeed. Actual data is written by WRITE SECTOR.
-                // This matches the Java reference which just sets
-                // formatted=true and calls setDone().
+                // commands succeed.
                 let track_idx = self.get_track_index();
                 if track_idx < self.track_formatted.len() {
                     self.track_formatted[track_idx] = true;
                 }
-                let formatted_count = self.track_formatted.iter().filter(|&&f| f).count();
-                eprintln!("HDC: FORMAT TRACK complete — C={}, H={}, SDH=0x{:02X}, track_idx={}, total_formatted={}",
-                    self.get_cyl(), self.get_head(), self.sdh, track_idx, formatted_count);
+                if self.trace {
+                    let formatted_count = self.track_formatted.iter().filter(|&&f| f).count();
+                    eprintln!("HDC: FORMAT TRACK complete — C={}, H={}, SDH=0x{:02X}, track_idx={}, total_formatted={}",
+                        self.get_cyl(), self.get_head(), self.sdh, track_idx, formatted_count);
+                }
                 self.set_done();
             }
             _ => {

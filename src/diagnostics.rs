@@ -754,6 +754,157 @@ fn extract_vram_text(machine: &crate::kaypro_machine::KayproMachine, lines: usiz
     text
 }
 
+/// Run TurboROM+HD boot with tracing to diagnose floppy directory issues.
+/// Boots TurboROM with a blank HD image and HDC/FDC tracing enabled,
+/// then dumps VRAM screen contents after reaching the prompt.
+pub fn trace_turborom_hd_boot() {
+    use iz80::*;
+
+    eprintln!("=== TurboROM+HD Boot Trace ===\n");
+
+    let fdc = crate::floppy_controller::FloppyController::new(
+        "disks/system/k484_turborom_63k_boot.img",
+        "disks/blank_disks/cpm22-kaypro4-blank.img",
+        crate::media::MediaFormat::DsDd,
+        10,
+        true,   // trace FDC
+        false,
+    );
+    let mut machine = crate::kaypro_machine::KayproMachine::new(
+        "roms/trom34.rom",
+        crate::kaypro_machine::VideoMode::Sy6545Crtc,
+        fdc,
+        true,    // has_hard_disk
+        false,   // trace_io
+        false,   // trace_system_bits
+        false,   // trace_crtc
+        false,   // trace_sio
+        false,   // trace_rtc
+        true,    // trace_hdc
+    );
+
+    // Create blank HD image
+    let path = std::env::temp_dir()
+        .join(format!("izkaypro_trace_{}.hd", std::process::id()));
+    if let Some(ref mut hd) = machine.hard_disk {
+        hd.load_image(path.to_str().unwrap())
+            .expect("failed to init blank HD image");
+    }
+
+    let mut cpu = Cpu::new_z80();
+    let max_instructions: u64 = 200_000_000;
+    let mut counter: u64 = 0;
+    let mut nmi_pending = false;
+    let mut nmi_deadline: u64 = 0;
+    let mut prompt_found = false;
+    let mut prompt_at: u64 = 0;
+    let post_prompt_budget: u64 = 50_000_000;
+
+    loop {
+        cpu.execute_instruction(&mut machine);
+        counter += 1;
+
+        // BDOS tracing: intercept calls to 0x0005 in RAM mode
+        if !machine.is_rom_rank() && cpu.registers().pc() == 0x0005 {
+            let cmd = cpu.registers().get8(Reg8::C);
+            let de = cpu.registers().get16(Reg16::DE);
+            eprintln!("[{:>10}] BDOS call {}: DE=0x{:04X}", counter, cmd, de);
+        }
+
+        // SIO interrupt processing
+        if counter % 1024 == 0 {
+            let i_reg = cpu.registers().get8(Reg8::I);
+            if let Some(handler) = machine.sio_check_interrupt(i_reg) {
+                let regs = cpu.registers();
+                let pc = regs.pc();
+                let mut sp = regs.get16(Reg16::SP);
+                sp = sp.wrapping_sub(2);
+                regs.set16(Reg16::SP, sp);
+                machine.poke(sp, pc as u8);
+                machine.poke(sp.wrapping_add(1), (pc >> 8) as u8);
+                cpu.registers().set_pc(handler);
+            }
+        }
+
+        // NMI processing
+        if machine.floppy_controller.raise_nmi {
+            machine.floppy_controller.raise_nmi = false;
+            nmi_pending = true;
+            nmi_deadline = counter + 10_000_000;
+        }
+        let mut nmi_signaled = false;
+        if nmi_pending && (cpu.is_halted()
+            || (counter >= nmi_deadline && machine.nmi_vector_is_safe()))
+        {
+            cpu.signal_nmi();
+            nmi_pending = false;
+            nmi_signaled = true;
+        }
+        if !nmi_signaled && cpu.is_halted() {
+            if prompt_found {
+                eprintln!("\n=== Boot complete, stable at HALT after {} instructions ===", prompt_at);
+            } else {
+                eprintln!("\n=== HALT at PC=0x{:04X} after {} instructions (no prompt) ===",
+                    cpu.registers().pc(), counter);
+            }
+            break;
+        }
+
+        // Check for prompt
+        if !prompt_found && counter % 100_000 == 0 {
+            if check_for_prompt(&machine) {
+                prompt_found = true;
+                prompt_at = counter;
+                eprintln!("\n=== Prompt found at {} instructions ===\n", counter);
+            }
+        }
+
+        if prompt_found && counter > prompt_at + post_prompt_budget {
+            eprintln!("\n=== Post-prompt budget exhausted ===");
+            break;
+        }
+
+        if counter >= max_instructions {
+            eprintln!("\n=== Timed out after {} instructions ===", counter);
+            break;
+        }
+    }
+
+    // Dump media content at directory offset for verification
+    eprintln!("\n=== Media Content Verification ===");
+    let media = machine.floppy_controller.media_a();
+    eprintln!("Media format: {:?}, size: {} bytes", 
+        if media.format == crate::media::MediaFormat::DsDd { "DSDD" } else { "other" },
+        media.content.len());
+    // Check offsets 5120-5152 (sector 10 side 1 = directory start)
+    if media.content.len() > 5152 {
+        let hex: String = (0..32).map(|i| format!("{:02x}", media.content[5120 + i])).collect::<Vec<_>>().join(" ");
+        eprintln!("Offset 5120 hex: {}", hex);
+        let ascii: String = (0..32).map(|i| {
+            let b = media.content[5120 + i];
+            if b >= 0x20 && b < 0x7F { b as char } else { '.' }
+        }).collect();
+        eprintln!("Offset 5120 asc: {}", ascii);
+    }
+    // Check offset 0 (boot sector)
+    if media.content.len() > 32 {
+        let hex: String = (0..32).map(|i| format!("{:02x}", media.content[i])).collect::<Vec<_>>().join(" ");
+        eprintln!("Offset 0000 hex: {}", hex);
+    }
+
+    // Dump VRAM
+    eprintln!("\n=== VRAM Screen Contents ===");
+    let text = extract_vram_text(&machine, 24);
+    for (i, line) in text.split('|').enumerate() {
+        if !line.is_empty() {
+            eprintln!("{:2}: {}", i, line);
+        }
+    }
+
+    // Clean up
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Print diagnostic results to console
 pub fn print_results(results: &[TestResult]) {
     println!("\n=== Kaypro Diagnostics ===\n");
