@@ -223,12 +223,41 @@ fn day_of_week(year: i32, month: u8, day: u8) -> u8 {
 }
 
 /// Get the local timezone offset from UTC in seconds.
-/// Uses libc localtime_r on Unix.
+#[cfg(unix)]
 fn local_utc_offset_secs() -> i64 {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&now, &mut tm);
         tm.tm_gmtoff as i64
+    }
+}
+
+#[cfg(windows)]
+fn local_utc_offset_secs() -> i64 {
+    #[repr(C)]
+    struct SYSTEMTIME { y: u16, m: u16, dow: u16, d: u16, h: u16, min: u16, s: u16, ms: u16 }
+    #[repr(C)]
+    struct TIME_ZONE_INFORMATION {
+        bias: i32,
+        _standard_name: [u16; 32],
+        _standard_date: SYSTEMTIME,
+        standard_bias: i32,
+        _daylight_name: [u16; 32],
+        _daylight_date: SYSTEMTIME,
+        daylight_bias: i32,
+    }
+    extern "system" {
+        fn GetTimeZoneInformation(lpTimeZoneInformation: *mut TIME_ZONE_INFORMATION) -> u32;
+    }
+    unsafe {
+        let mut tzi: TIME_ZONE_INFORMATION = std::mem::zeroed();
+        let result = GetTimeZoneInformation(&mut tzi);
+        // Bias is in minutes west of UTC; negate for Unix convention (east positive)
+        let mut offset_mins = -(tzi.bias as i64);
+        if result == 2 {
+            offset_mins -= tzi.daylight_bias as i64;
+        }
+        offset_mins * 60
     }
 }

@@ -3,7 +3,10 @@ use std::io::{Write};
 use iz80::Machine;
 use super::FloppyController;
 use super::hard_disk::HardDisk;
+#[cfg(unix)]
 use super::keyboard_unix::Keyboard;
+#[cfg(windows)]
+use super::keyboard_win::Keyboard;
 use super::rtc::Rtc;
 use super::sio::Sio;
 use super::sy6545::Sy6545;

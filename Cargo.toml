@@ -9,10 +9,18 @@ repository = "https://github.com/ivanizag/izkaypro"
 iz80 = "^0.3.5"
 #iz80 = {path = "../iz80"}
 clap = { version = "4", features = ["derive"] }
-termios = "^0.3.3"
-libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+termios = "^0.3.3"
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+] }
 
 # The profile that 'dist' will build with
 [profile.dist]

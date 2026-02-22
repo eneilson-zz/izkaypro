@@ -33,7 +33,8 @@ pub struct Sio {
     tx_ready_at: Instant,
     tx_file: Option<std::fs::File>,
 
-    // Serial device file descriptor for modem control ioctls
+    // Serial device file descriptor for modem control ioctls (Unix only)
+    #[cfg(unix)]
     serial_fd: Option<i32>,
     device_name: String,
 
@@ -53,6 +54,7 @@ impl Sio {
             rx_overrun: false,
             tx_ready_at: Instant::now(),
             tx_file: None,
+            #[cfg(unix)]
             serial_fd: None,
             device_name: String::new(),
             baud_rate_code: 0x0E, // Default 9600
@@ -64,6 +66,7 @@ impl Sio {
     /// Open a serial device and start the background reader thread.
     /// The device path can be a real serial port (/dev/ttyUSB0) or a
     /// pty endpoint (/tmp/kayproA created by socat, etc.).
+    #[cfg(unix)]
     pub fn open_serial(&mut self, device_path: &str) -> Result<(), String> {
         use std::os::unix::io::{AsRawFd, FromRawFd};
 
@@ -135,6 +138,12 @@ impl Sio {
             println!("SIO A: Opened serial device '{}'", device_path);
         }
         Ok(())
+    }
+
+    /// Serial port support is not yet available on Windows.
+    #[cfg(windows)]
+    pub fn open_serial(&mut self, device_path: &str) -> Result<(), String> {
+        Err(format!("Serial port '{}' not supported on Windows yet", device_path))
     }
 
     /// Write to the control port (port 0x06).
@@ -363,10 +372,10 @@ impl Sio {
     }
 
     /// Send or clear a break condition on the serial line.
+    #[cfg(unix)]
     fn handle_break(&mut self, send_break: bool) {
         if let Some(fd) = self.serial_fd {
             if send_break {
-                // tcsendbreak sends a break for a duration (0 = implementation-defined)
                 unsafe { libc::tcsendbreak(fd, 0); }
                 if self.trace {
                     println!("SIO A: Send Break asserted");
@@ -379,7 +388,11 @@ impl Sio {
         }
     }
 
+    #[cfg(windows)]
+    fn handle_break(&mut self, _send_break: bool) {}
+
     /// Update RTS and DTR modem control lines from WR5 state.
+    #[cfg(unix)]
     fn update_modem_signals(&self) {
         if let Some(fd) = self.serial_fd {
             let rts = (self.wr[5] >> 1) & 0x01 != 0;
@@ -397,9 +410,12 @@ impl Sio {
         }
     }
 
+    #[cfg(windows)]
+    fn update_modem_signals(&self) {}
+
     /// Read modem status lines (CTS, DCD) from the serial device.
-    /// Reserved for Phase 4 use with real serial hardware.
     #[allow(dead_code)]
+    #[cfg(unix)]
     fn read_modem_signals(&self) -> (bool, bool) {
         if let Some(fd) = self.serial_fd {
             let mut bits: libc::c_int = 0;
@@ -410,7 +426,12 @@ impl Sio {
                 return (cts, dcd);
             }
         }
-        // Default: both asserted (pty or no connection)
+        (true, true)
+    }
+
+    #[allow(dead_code)]
+    #[cfg(windows)]
+    fn read_modem_signals(&self) -> (bool, bool) {
         (true, true)
     }
 
