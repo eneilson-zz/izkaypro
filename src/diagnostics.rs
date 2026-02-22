@@ -557,7 +557,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: true,
-            hd_image: Some("disks/system/turborom.hd"),
+            hd_image: Some("disks/system/kaypro10.hd"),
         },
     ];
 
@@ -794,7 +794,7 @@ pub fn trace_turborom_hd_boot() {
 
     trace!("=== Kaypro 10 HD Boot Trace ===");
     trace!("ROM: roms/81-478c.rom");
-    trace!("HD:  disks/system/turborom.hd");
+    trace!("HD:  disks/system/kaypro10.hd");
     trace!("Date: {:?}", std::time::SystemTime::now());
     trace!("");
 
@@ -820,7 +820,7 @@ pub fn trace_turborom_hd_boot() {
     );
 
     // Load the real HD image
-    let hd_path = "disks/system/turborom.hd";
+    let hd_path = "disks/system/kaypro10.hd";
     let hdc_log_path = "hdc-detail.log";
     if let Some(ref mut hd) = machine.hard_disk {
         hd.load_image(hd_path)
