@@ -120,6 +120,14 @@ struct Cli {
     /// Trace TurboROM+HD boot sequence (debug diagnostic)
     #[arg(long, hide = true)]
     trace_turborom_hd: bool,
+
+    /// Write HDC/ROM/BDOS traces to a log file (screen keeps working)
+    #[arg(long, value_name = "FILE")]
+    trace_log: Option<String>,
+
+    /// Debug MAKTURBO on Kaypro 10 (headless, traces to makturbo-debug.log)
+    #[arg(long, hide = true)]
+    debug_makturbo: bool,
 }
 
 fn main() {
@@ -144,17 +152,18 @@ fn main() {
     let disk_b_path = config.disk_b.clone()
         .unwrap_or_else(|| config.get_default_disk_b().to_string());
 
+    let has_trace_log = cli.trace_log.is_some();
     let mut trace_cpu = cli.cpu_trace || cli.trace_all;
     let trace_io = cli.io_trace || cli.trace_all;
     let trace_fdc = cli.fdc_trace || cli.trace_all;
     let trace_fdc_rw = cli.fdc_trace_rw || cli.trace_all;
     let trace_system_bits = cli.system_bits || cli.trace_all;
-    let trace_rom = cli.rom_trace || cli.trace_all;
-    let trace_bdos = cli.bdos_trace || cli.trace_all;
+    let trace_rom = cli.rom_trace || cli.trace_all || has_trace_log;
+    let trace_bdos = cli.bdos_trace || cli.trace_all || has_trace_log;
     let trace_crtc = cli.crtc_trace || cli.trace_all;
     let trace_sio = cli.sio_trace || cli.trace_all;
     let trace_rtc = cli.rtc_trace || cli.trace_all;
-    let trace_hdc = cli.hdc_trace || cli.trace_all;
+    let trace_hdc = cli.hdc_trace || cli.trace_all || has_trace_log;
     let run_diag = cli.diagnostics;
     let run_boot_test = cli.boot_test;
     // Kaypro 10: controller always present (soldered to motherboard).
@@ -165,16 +174,18 @@ fn main() {
     let has_hard_disk = config.model == KayproModel::Kaypro10
         || (config.model == KayproModel::TurboRom && cli.hd.is_some());
 
+    // When --trace-log is used, traces go to a file and don't affect screen rendering.
+    // Only count traces that go to stdout/stderr as "any_trace".
     let any_trace = trace_io
         || trace_cpu
         || trace_fdc
         || trace_fdc_rw
-        || trace_rom
-        || trace_bdos
+        || (trace_rom && !has_trace_log)
+        || (trace_bdos && !has_trace_log)
         || trace_crtc
         || trace_sio
         || trace_rtc
-        || trace_hdc
+        || (trace_hdc && !has_trace_log)
         || trace_system_bits;
 
     // Init device with configuration
@@ -213,6 +224,37 @@ fn main() {
         }
     }
 
+    // Set up trace log file(s). ROM/BDOS traces go to the specified file;
+    // HDC register-level traces go to a companion file with "-hdc" suffix
+    // (two separate handles avoid interleaving/overwrite issues).
+    let mut trace_log: Option<std::fs::File> = None;
+    if let Some(ref log_path) = cli.trace_log {
+        use std::io::Write;
+        let mut f = std::fs::File::create(log_path)
+            .unwrap_or_else(|e| { eprintln!("Failed to create trace log '{}': {}", log_path, e); std::process::exit(1); });
+        let _ = writeln!(f, "=== izkaypro trace log ===");
+        let _ = writeln!(f, "Config: {}", config.get_description());
+        let _ = writeln!(f, "");
+        // HDC register-level traces go to a companion file
+        let hdc_log_path = format!("{}-hdc.log",
+            log_path.strip_suffix(".log").unwrap_or(log_path));
+        if let Some(ref mut hd) = machine.hard_disk {
+            let hdc_file = std::fs::File::create(&hdc_log_path)
+                .expect("failed to create HDC trace log");
+            hd.set_trace_file(hdc_file);
+        }
+        // FDC-level traces go to a companion file with "-fdc" suffix
+        let fdc_log_path = format!("{}-fdc.log",
+            log_path.strip_suffix(".log").unwrap_or(log_path));
+        let fdc_file = std::fs::File::create(&fdc_log_path)
+            .expect("failed to create FDC trace log");
+        machine.floppy_controller.trace_file = Some(fdc_file);
+        eprintln!("Tracing ROM/BDOS to {}", log_path);
+        eprintln!("Tracing HDC registers to {}", hdc_log_path);
+        eprintln!("Tracing FDC reads to {}", fdc_log_path);
+        trace_log = Some(f);
+    }
+
     let mut cpu = Cpu::new_z80();
     cpu.set_trace(trace_cpu);
 
@@ -228,6 +270,12 @@ fn main() {
     // Trace TurboROM+HD boot if requested
     if cli.trace_turborom_hd {
         diagnostics::trace_turborom_hd_boot();
+        return;
+    }
+
+    // Debug MAKTURBO if requested
+    if cli.debug_makturbo {
+        diagnostics::debug_makturbo();
         return;
     }
 
@@ -281,6 +329,10 @@ fn main() {
     let mut nmi_pending = false;
     let mut nmi_deadline: u64 = 0;
     let mut done = false;
+
+    // Runtime BIOS base discovery for universal ROM tracing
+    let mut bios_base: Option<u16> = None;
+    let mut last_rom_rank = true; // Start in ROM mode
     while !done {
 
         cpu.execute_instruction(&mut machine);
@@ -447,51 +499,64 @@ fn main() {
             break;
         }
 
-        // Tracing for ROM 81-149c
-        /*
-        if trace_rom && machine.is_rom_rank(){
-            let dma = machine.peek16(0xfc14);
-            match cpu.registers().pc() {
-                0x004b => println!("EP_COLD"),
-                0x0186 => println!("EP_INITDSK"),
-                0x0006 => println!("EP_INITVID"),
-                0x0009 => println!("EP_INITDEV"),
-                0x01d8 => println!("EP_HOME"),
-                0x01b4 => println!("EP_SELDSK {}", cpu.registers().get8(Reg8::C)),
-                0x01cc => println!("EP_SETTRK {}", cpu.registers().get8(Reg8::C)),
-                0x01bb => println!("EP_SETSEC {}", cpu.registers().get8(Reg8::C)),
-                0x01c7 => println!("EP_SETDMA"),
-                0x01ec => println!("EP_READ {:04x}", dma),
-                0x0207 => println!("EP_WRITE {:04x}", dma),
-                0x03e4 => println!("EP_SECTRAN"),
-                0x040f => println!("EP_DISKON"),
-                0x041e => println!("EP_DISKOFF"),
-                0xfa00 => println!("FUNC: OS start"),
-                _ => {}
+        // Runtime BIOS base discovery: detect ROM→RAM transition
+        if (trace_rom || trace_bdos) && has_trace_log {
+            let in_rom = machine.is_rom_rank();
+            if in_rom != last_rom_rank {
+                last_rom_rank = in_rom;
+                if !in_rom && bios_base.is_none() {
+                    let warm_lo = machine.peek(0x0001) as u16;
+                    let warm_hi = machine.peek(0x0002) as u16;
+                    let warm_boot = (warm_hi << 8) | warm_lo;
+                    if warm_boot > 0x100 && warm_boot < 0xFFFF {
+                        let base = warm_boot - 3;
+                        bios_base = Some(base);
+                        if let Some(ref mut f) = trace_log {
+                            use std::io::Write;
+                            let _ = writeln!(f, "[{:>10}] BIOS base discovered: 0x{:04X}", counter, base);
+                        }
+                    }
+                }
             }
-        }
-        */
 
-        // Tracing for ROM 81-232
-        if trace_rom && machine.is_rom_rank(){
-            let dma = machine.peek16(0xfc14);
-            match cpu.registers().pc() {
-                0x004b => println!("EP_COLD"),
-                0x0195 => println!("EP_INITDSK"),
-                0x0006 => println!("EP_INITVID"),
-                0x0009 => println!("EP_INITDEV"),
-                0x01e7 => println!("EP_HOME"),
-                0x01c3 => println!("EP_SELDSK {}", cpu.registers().get8(Reg8::C)),
-                0x01db => println!("EP_SETTRK {}", cpu.registers().get8(Reg8::C)),
-                0x01ca => println!("EP_SETSEC {}", cpu.registers().get8(Reg8::C)),
-                0x01d6 => println!("EP_SETDMA"),
-                0x01fb => println!("EP_READ {:04x}", dma),
-                0x0216 => println!("EP_WRITE {:04x}", dma),
-                0x0479 => println!("EP_SECTRAN"),
-                0x04a2 => println!("EP_DISKON"),
-                0x04b1 => println!("EP_DISKOFF"),
-                0xfa00 => println!("FUNC: OS start"),
-                _ => {}
+            let pc = cpu.registers().pc();
+
+            // BIOS entry point tracing (runtime, works with any ROM)
+            if !in_rom {
+                if let Some(base) = bios_base {
+                    if pc >= base && pc <= base + 51 && (pc - base) % 3 == 0 {
+                        let entry = (pc - base) / 3;
+                        let msg: Option<String> = match entry {
+                            0 => Some("BOOT".into()),
+                            1 => Some("WBOOT".into()),
+                            8 => Some("HOME".into()),
+                            9 => Some(format!("SELDSK drive={} ({})",
+                                cpu.registers().get8(Reg8::C),
+                                (b'A' + cpu.registers().get8(Reg8::C)) as char)),
+                            10 => Some(format!("SETTRK track={}",
+                                cpu.registers().get8(Reg8::C))),
+                            11 => Some(format!("SETSEC sector={}",
+                                cpu.registers().get8(Reg8::C))),
+                            12 => Some("SETDMA".into()),
+                            13 => Some("READ".into()),
+                            14 => Some("WRITE".into()),
+                            16 => {
+                                let sec = cpu.registers().get16(Reg16::BC);
+                                let xlt = cpu.registers().get16(Reg16::DE);
+                                Some(format!("SECTRAN sector={} xlt=0x{:04X}", sec, xlt))
+                            },
+                            _ => None,
+                        };
+                        if let Some(m) = msg {
+                            if let Some(ref mut f) = trace_log {
+                                use std::io::Write;
+                                let _ = writeln!(f, "[{:>10}] BIOS: {}", counter, m);
+                            } else {
+                                println!("BIOS: {}", m);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -506,7 +571,24 @@ fn main() {
                     "unknown"
                 };
 
-                println!("BDOS command {}: {}({:04x})", command, name, args);
+                if let Some(ref mut f) = trace_log {
+                    use std::io::Write;
+                    let _ = writeln!(f, "[{:>10}] BDOS {}: {}({:04x})", counter, command, name, args);
+                    // For file operations, dump FCB filename
+                    if command == 15 || command == 17 || command == 22 {
+                        let de = args;
+                        let fcb_drive = machine.peek(de);
+                        let mut filename = String::new();
+                        for i in 1..=11u16 {
+                            let ch = machine.peek(de.wrapping_add(i)) & 0x7F;
+                            if ch >= 0x20 { filename.push(ch as char); }
+                        }
+                        let _ = writeln!(f, "[{:>10}]   FCB: drive={} file=\"{}\"",
+                            counter, fcb_drive, filename.trim());
+                    }
+                } else {
+                    println!("BDOS command {}: {}({:04x})", command, name, args);
+                }
             }
         }
     }

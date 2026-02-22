@@ -93,7 +93,7 @@ pub struct KayproMachine {
     pub vram: [u8; 4096],
     pub vram_dirty: bool,
     pub system_bits: u8,
-    port14_raw: u8, // Raw value written to port 0x14 (for 81-292a ROM compatibility)
+    pub port14_raw: u8, // Raw value written to port 0x14 (for 81-292a ROM compatibility)
     
     // Video mode and CRTC for Kaypro 2X/4/84
     pub video_mode: VideoMode,

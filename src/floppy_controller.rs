@@ -60,6 +60,9 @@ pub struct FloppyController {
     // Debug: last FDC command for crash diagnosis
     pub last_command: u8,
     pub last_command_count: u64,
+
+    // Optional trace log file for FDC-level detail (used with --trace-log)
+    pub trace_file: Option<std::fs::File>,
 }
 
 #[derive(Copy, Clone)]
@@ -171,6 +174,7 @@ impl FloppyController {
             trace_rw,
             last_command: 0,
             last_command_count: 0,
+            trace_file: None,
         }
     }
     
@@ -386,6 +390,18 @@ impl FloppyController {
                 if self.trace || self.trace_rw {
                     println!("FDC: Read sector setup: index={}, last={}, transfer_size={}", index, last, last - index);
                 }
+                if let Some(ref mut f) = self.trace_file {
+                    use std::io::Write;
+                    let first4 = if last - index >= 4 {
+                        format!("{:02x} {:02x} {:02x} {:02x}",
+                            self.media[self.drive as usize].read_byte(index),
+                            self.media[self.drive as usize].read_byte(index+1),
+                            self.media[self.drive as usize].read_byte(index+2),
+                            self.media[self.drive as usize].read_byte(index+3))
+                    } else { String::new() };
+                    let _ = writeln!(f, "FDC: READ side={} head={} sec={} → offset=0x{:X} [{}]",
+                        side_2 as u8, track, sector, index, first4);
+                }
             } else {
                 // Real WD1793: the FDC searches for the sector ID as the disk
                 // rotates. After ~5 revolutions without finding it, BUSY clears
@@ -395,6 +411,11 @@ impl FloppyController {
                 self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
                 if self.trace || self.trace_rw {
                     println!("FDC: Read sector FAILED: sector {} not found", sector);
+                }
+                if let Some(ref mut f) = self.trace_file {
+                    use std::io::Write;
+                    let _ = writeln!(f, "FDC: READ FAILED side={} head={} sec={} (sector not found)",
+                        side_2 as u8, track, sector);
                 }
             }
             self.raise_nmi = true;
