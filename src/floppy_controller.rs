@@ -2,6 +2,19 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use super::media::{self, *};
 
+/// Route FDC trace output to trace_file when available, otherwise println!.
+/// This allows --trace-log to capture FDC traces without disrupting the screen.
+macro_rules! fdc_log {
+    ($self:expr, $($arg:tt)*) => {
+        if let Some(ref mut f) = $self.trace_file {
+            use std::io::Write;
+            let _ = writeln!(f, $($arg)*);
+        } else {
+            println!($($arg)*);
+        }
+    };
+}
+
 // Fallback embedded disk images (used when external files can't be loaded)
 static FALLBACK_DISK_DSDD: &[u8] = include_bytes!("../disks/system/cpm22g-rom292a.img");
 static FALLBACK_BLANK_DSDD: &[u8] = include_bytes!("../disks/blank_disks/cpm22-kaypro4-blank.img");
@@ -249,14 +262,14 @@ impl FloppyController {
         if drive != self.drive {
             if self.write_track_active {
                 if self.trace {
-                    println!("FDC: Drive select {} -> {} IGNORED (write track active on drive {})",
+                    fdc_log!(self, "FDC: Drive select {} -> {} IGNORED (write track active on drive {})",
                         self.drive, drive, self.write_track_drive);
                 }
                 return;
             }
             self.media_selected().flush_disk();
             if self.trace {
-                println!("FDC: Drive select {} -> {}", self.drive, drive);
+                fdc_log!(self, "FDC: Drive select {} -> {}", self.drive, drive);
             }
             self.drive = drive;
         }
@@ -268,7 +281,7 @@ impl FloppyController {
 
         if self.write_track_active && (command & 0xf0) != 0xd0 {
             if self.trace || self.trace_rw {
-                println!("FDC: New command 0x{:02x} while write_track_active, finishing write track (buf len={})",
+                fdc_log!(self, "FDC: New command 0x{:02x} while write_track_active, finishing write track (buf len={})",
                     command, self.write_track_buffer.len());
             }
             self.finish_write_track();
@@ -280,7 +293,7 @@ impl FloppyController {
             // RESTORE command, type I
             // 0000_hVrr
             if self.trace {
-                println!("FDC: Restore");
+                fdc_log!(self, "FDC: Restore");
             }
             self.read_index = 0;
             self.read_last = 0;
@@ -294,7 +307,7 @@ impl FloppyController {
             // 0001_hVrr
             let track = self.data;
             if self.trace {
-                println!("FDC: Seek track {}", track);
+                fdc_log!(self, "FDC: Seek track {}", track);
             }
             if self.media_selected().is_valid_track(track) {
                 self.track = track;
@@ -324,7 +337,7 @@ impl FloppyController {
                 self.track = self.head_position;
             }
             if self.trace {
-                println!("FDC: Step (dir={}, update={}) head={}", 
+                fdc_log!(self, "FDC: Step (dir={}, update={}) head={}", 
                     if self.step_direction > 0 { "in" } else { "out" }, 
                     update_track, self.head_position);
             }
@@ -347,7 +360,7 @@ impl FloppyController {
                 self.track = self.head_position;
             }
             if self.trace {
-                println!("FDC: Step in (update={}) head={}", update_track, self.head_position);
+                fdc_log!(self, "FDC: Step in (update={}) head={}", update_track, self.head_position);
             }
             self.status = self.type_i_status(FDCStatus::NoError as u8);
             self.raise_nmi = true;
@@ -364,7 +377,7 @@ impl FloppyController {
                 self.track = self.head_position;
             }
             if self.trace {
-                println!("FDC: Step out (update={}) head={}", update_track, self.head_position);
+                fdc_log!(self, "FDC: Step out (update={}) head={}", update_track, self.head_position);
             }
             if self.head_position == 0 {
                 self.status = self.type_i_status(FDCStatus::LostDataOrTrack0 as u8);
@@ -379,7 +392,7 @@ impl FloppyController {
             let side_compare = (command & 0x02) != 0;
             let side_flag = if (command & 0x08) != 0 { 1u8 } else { 0u8 };
             if self.trace || self.trace_rw {
-                println!("FDC: Read sector (cmd:0x{:02x}, Si:{}, Tr:{}, Se:{}, Head:{}, multi:{}, C:{}, S:{})",
+                fdc_log!(self, "FDC: Read sector (cmd:0x{:02x}, Si:{}, Tr:{}, Se:{}, Head:{}, multi:{}, C:{}, S:{})",
                     command, self.side_2, self.track, self.sector, self.head_position,
                     self.multi_sector, side_compare, side_flag);
             }
@@ -393,7 +406,7 @@ impl FloppyController {
                 self.read_last = last;
                 self.status = FDCStatus::Busy as u8;
                 if self.trace || self.trace_rw {
-                    println!("FDC: Read sector setup: index={}, last={}, transfer_size={}", index, last, last - index);
+                    fdc_log!(self, "FDC: Read sector setup: index={}, last={}, transfer_size={}", index, last, last - index);
                 }
                 if let Some(ref mut f) = self.trace_file {
                     use std::io::Write;
@@ -415,7 +428,7 @@ impl FloppyController {
                 // BUSY will clear on the next status poll (no data to transfer).
                 self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
                 if self.trace || self.trace_rw {
-                    println!("FDC: Read sector FAILED: sector {} not found", sector);
+                    fdc_log!(self, "FDC: Read sector FAILED: sector {} not found", sector);
                 }
                 if let Some(ref mut f) = self.trace_file {
                     use std::io::Write;
@@ -432,7 +445,7 @@ impl FloppyController {
             // a0 (bit 0): 0=normal data mark (FB), 1=deleted data mark (F8)
             // We accept both but don't distinguish in sector images
             if self.trace || self.trace_rw {
-                println!("FDC: Write sector (Si:{}, Tr:{}, Se:{}, Head:{}, multi:{})", self.side_2, self.track, self.sector, self.head_position, self.multi_sector);
+                fdc_log!(self, "FDC: Write sector (Si:{}, Tr:{}, Se:{}, Head:{}, multi:{})", self.side_2, self.track, self.sector, self.head_position, self.multi_sector);
             }
 
             if self.media_selected().is_write_protected() {
@@ -467,7 +480,7 @@ impl FloppyController {
                 let sector_id = base_sector_id + rotation_pos;
                 
                 if self.trace {
-                    println!("FDC: Read address ({},{},{}) -> sector_id={}", side_2, track, sector, sector_id);
+                    fdc_log!(self, "FDC: Read address ({},{},{}) -> sector_id={}", side_2, track, sector, sector_id);
                 }
                 // WD1793 datasheet: "The track address of the ID field is written
                 // into the sector register so that a comparison can be made by the user."
@@ -488,7 +501,7 @@ impl FloppyController {
                 self.raise_nmi = true;
             } else {
                 if self.trace {
-                    println!("FDC: Read address ({},{},{}) = Error", side_2, track, sector);
+                    fdc_log!(self, "FDC: Read address ({},{},{}) = Error", side_2, track, sector);
                 }
                 // Real WD1793: stays BUSY while scanning for sector headers
                 // (~5 revolutions), then clears BUSY and sets RNF. Use the
@@ -503,12 +516,12 @@ impl FloppyController {
             // 1101_IIII
             let interrupts = command & 0x0f;
             if self.trace {
-                println!("FDC: Force interrupt {:04b}", interrupts);
+                fdc_log!(self, "FDC: Force interrupt {:04b}", interrupts);
             }
 
             if self.write_track_active {
                 if self.trace || self.trace_rw {
-                    println!("FDC: Force interrupt while write_track_active, buf len={}", self.write_track_buffer.len());
+                    fdc_log!(self, "FDC: Force interrupt while write_track_active, buf len={}", self.write_track_buffer.len());
                 }
                 self.finish_write_track();
             }
@@ -535,7 +548,7 @@ impl FloppyController {
             // READ TRACK command, type III
             // 1110_0E00
             if self.trace {
-                println!("FDC: Read track (not implemented, returning empty)");
+                fdc_log!(self, "FDC: Read track (not implemented, returning empty)");
             }
             self.status = FDCStatus::NoError as u8;
             self.raise_nmi = true;
@@ -548,7 +561,7 @@ impl FloppyController {
                 return;
             }
             if self.trace || self.trace_rw {
-                println!("FDC: Write track (Drive:{}, Si:{}, Tr:{}, Head:{}, SD:{})", self.drive, self.side_2, self.head_position, self.head_position, self.single_density);
+                fdc_log!(self, "FDC: Write track (Drive:{}, Si:{}, Tr:{}, Head:{}, SD:{})", self.drive, self.side_2, self.head_position, self.head_position, self.single_density);
             }
             self.write_track_active = true;
             self.write_track_drive = self.drive;
@@ -560,7 +573,7 @@ impl FloppyController {
             self.raise_nmi = true;
         } else {
             if self.trace {
-                println!("FDC: ${:02x} command not implemented", command);
+                fdc_log!(self, "FDC: ${:02x} command not implemented", command);
             }
         }
     }
@@ -581,6 +594,17 @@ impl FloppyController {
         }
 
         let mut status = self.status;
+
+        // NOT READY (bit 7) is real-time on the WD1793: it reflects the
+        // current state of the drive's READY input, not a latched value.
+        // Update it dynamically so inserting/removing a disk takes effect
+        // immediately without requiring a new FDC command first.
+        if self.disk_in_drive {
+            status &= !(FDCStatus::NotReady as u8);
+        } else {
+            status |= FDCStatus::NotReady as u8;
+        }
+
         if self.status & FDCStatus::Busy as u8 != 0 {
             // Type II/III status: bit 1 = DRQ (data ready for CPU to read/write)
             if self.read_index < self.read_last || !self.data_buffer.is_empty() || self.write_track_active {
@@ -610,7 +634,7 @@ impl FloppyController {
             }
         }
         if (self.trace || self.trace_rw) && status & 0x1c != 0 {
-            println!("FDC: Status error bits: {:02x} (busy:{}, drq:{}, lost:{}, crc:{}, rnf:{})",
+            fdc_log!(self, "FDC: Status error bits: {:02x} (busy:{}, drq:{}, lost:{}, crc:{}, rnf:{})",
                 status,
                 status & 0x01 != 0,
                 status & 0x02 != 0,
@@ -624,7 +648,7 @@ impl FloppyController {
     pub fn put_track(&mut self, value: u8) {
         self.track = value;
         if self.trace {
-            println!("FDC: Set track {}", value);
+            fdc_log!(self, "FDC: Set track {}", value);
         }
     }
 
@@ -635,7 +659,7 @@ impl FloppyController {
     pub fn put_sector(&mut self, value: u8) {
         self.sector = value;
         if self.trace {
-            println!("FDC: Set sector {}", value);
+            fdc_log!(self, "FDC: Set sector {}", value);
         }
     }
 
@@ -654,13 +678,13 @@ impl FloppyController {
                 self.write_track_remaining -= 1;
                 if self.write_track_remaining == 0 {
                     if self.trace || self.trace_rw {
-                        println!("FDC: WriteTrack finishing (countdown reached 0, buf len={})", self.write_track_buffer.len());
+                        fdc_log!(self, "FDC: WriteTrack finishing (countdown reached 0, buf len={})", self.write_track_buffer.len());
                     }
                     self.finish_write_track();
                 }
             } else if self.write_track_buffer.len() >= 12000 {
                 if self.trace || self.trace_rw {
-                    println!("FDC: WriteTrack finishing (safety limit 12000, buf len={})", self.write_track_buffer.len());
+                    fdc_log!(self, "FDC: WriteTrack finishing (safety limit 12000, buf len={})", self.write_track_buffer.len());
                 }
                 self.finish_write_track();
             }
@@ -678,7 +702,7 @@ impl FloppyController {
                 // We are done writing this sector
                 self.media_selected().flush_disk();
                 if self.trace {
-                    println!("FDC: Set data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
+                    fdc_log!(self, "FDC: Set data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
                 if self.multi_sector {
                     // Auto-increment sector and continue to next
@@ -692,7 +716,7 @@ impl FloppyController {
                         self.read_index = index;
                         self.read_last = last;
                         if self.trace {
-                            println!("FDC: Multi-sector write continuing with sector {}", self.sector);
+                            fdc_log!(self, "FDC: Multi-sector write continuing with sector {}", self.sector);
                         }
                     } else {
                         // No more valid sectors - complete
@@ -734,7 +758,7 @@ impl FloppyController {
             if self.read_index == self.read_last {
                 // We are done reading this sector's actual data.
                 if self.trace {
-                    println!("FDC: Get data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
+                    fdc_log!(self, "FDC: Get data completed ${:02x} {}-{}-{}", self.data, self.read_index, self.read_last, self.sector);
                 }
                 if self.trace || self.trace_rw {
                     let track = self.head_position;
@@ -749,7 +773,7 @@ impl FloppyController {
                     let b1 = self.media[self.drive as usize].read_byte(start + 1);
                     let b2 = self.media[self.drive as usize].read_byte(start + 2);
                     let b3 = self.media[self.drive as usize].read_byte(start + 3);
-                    println!("FDC: Verify read sector {}: first 4 bytes = {:02x} {:02x} {:02x} {:02x}",
+                    fdc_log!(self, "FDC: Verify read sector {}: first 4 bytes = {:02x} {:02x} {:02x} {:02x}",
                         self.sector, b0, b1, b2, b3);
                 }
                 if self.multi_sector {
@@ -764,7 +788,7 @@ impl FloppyController {
                         self.read_index = index;
                         self.read_last = last;
                         if self.trace {
-                            println!("FDC: Multi-sector read continuing with sector {}", self.sector);
+                            fdc_log!(self, "FDC: Multi-sector read continuing with sector {}", self.sector);
                         }
                     } else {
                         // No more valid sectors - complete
@@ -821,7 +845,7 @@ impl FloppyController {
 
         if side_2 && !self.media[drive].double_sided() {
             if self.trace || self.trace_rw {
-                println!("FDC: WriteTrack side 1 on single-sided disk — upgrading to DSDD");
+                fdc_log!(self, "FDC: WriteTrack side 1 on single-sided disk — upgrading to DSDD");
             }
             self.media[drive].upgrade_to_double_sided();
         }
@@ -927,7 +951,7 @@ impl FloppyController {
                     .sector_index(side_2, track, id_sector);
                 if valid {
                     if self.trace || self.trace_rw {
-                        println!("FDC: WriteTrack sector {} at buf[{}], media index {}, len {}, id_n={}, stream_size={}",
+                        fdc_log!(self, "FDC: WriteTrack sector {} at buf[{}], media index {}, len {}, id_n={}, stream_size={}",
                             id_sector, i, index, write_len, id_n, stream_size);
                     }
                     for j in 0..write_len {
@@ -935,7 +959,7 @@ impl FloppyController {
                     }
                     sectors_written += 1;
                 } else if self.trace || self.trace_rw {
-                    println!("FDC: WriteTrack sector {} at buf[{}] INVALID (sector_index returned false)",
+                    fdc_log!(self, "FDC: WriteTrack sector {} at buf[{}] INVALID (sector_index returned false)",
                         id_sector, i);
                 }
                 i += stream_size;
@@ -947,20 +971,20 @@ impl FloppyController {
         }
 
         if self.trace || self.trace_rw {
-            println!("FDC: Write track complete (Si:{}, Tr:{}, {} sectors, SD:{}, buf:{})",
+            fdc_log!(self, "FDC: Write track complete (Si:{}, Tr:{}, {} sectors, SD:{}, buf:{})",
                 side_2, track, sectors_written, self.single_density, buf.len());
         }
 
         if track_learned_n.is_some() && min_sector_id != 255 {
             let media = &self.media[drive];
             if self.trace || self.trace_rw {
-                println!("FDC: Track {}/{} geometry: N={}, sectors={}, sector_base={}",
+                fdc_log!(self, "FDC: Track {}/{} geometry: N={}, sectors={}, sector_base={}",
                     track, if side_2 { "S1" } else { "S0" },
                     track_learned_n.unwrap(), sector_count, min_sector_id);
             }
             // Also log global fallback
             if self.trace || self.trace_rw {
-                println!("FDC: Global fallback geometry: N={}, sector_size={}, sectors_per_side={}, sector_base={}",
+                fdc_log!(self, "FDC: Global fallback geometry: N={}, sector_size={}, sectors_per_side={}, sector_base={}",
                     media.learned_n.unwrap_or(255), media.sector_size(),
                     media.sectors_per_side(), media.sector_id_base());
             }

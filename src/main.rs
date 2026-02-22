@@ -155,8 +155,8 @@ fn main() {
     let has_trace_log = cli.trace_log.is_some();
     let mut trace_cpu = cli.cpu_trace || cli.trace_all;
     let trace_io = cli.io_trace || cli.trace_all;
-    let trace_fdc = cli.fdc_trace || cli.trace_all;
-    let trace_fdc_rw = cli.fdc_trace_rw || cli.trace_all;
+    let trace_fdc = cli.fdc_trace || cli.trace_all || has_trace_log;
+    let trace_fdc_rw = cli.fdc_trace_rw || cli.trace_all || has_trace_log;
     let trace_system_bits = cli.system_bits || cli.trace_all;
     let trace_rom = cli.rom_trace || cli.trace_all || has_trace_log;
     let trace_bdos = cli.bdos_trace || cli.trace_all || has_trace_log;
@@ -178,8 +178,8 @@ fn main() {
     // Only count traces that go to stdout/stderr as "any_trace".
     let any_trace = trace_io
         || trace_cpu
-        || trace_fdc
-        || trace_fdc_rw
+        || (trace_fdc && !has_trace_log)
+        || (trace_fdc_rw && !has_trace_log)
         || (trace_rom && !has_trace_log)
         || (trace_bdos && !has_trace_log)
         || trace_crtc
@@ -405,15 +405,25 @@ fn main() {
                         screen.show_status = !screen.show_status;
                     },
                     Command::SelectDiskA => {
-                        if let Some(path) = screen.prompt(&mut machine, "File to load in Drive A") {
+                        let prompt = if has_hard_disk {
+                            "File to load in Drive C (floppy)"
+                        } else {
+                            "File to load in Drive A"
+                        };
+                        if let Some(path) = screen.prompt(&mut machine, prompt) {
                             let res = machine.floppy_controller.media_a_mut().load_disk(path.as_str());
                             if let Err(err) = res {
                                 screen.message(&mut machine, &err.to_string())
+                            } else {
+                                machine.floppy_controller.disk_in_drive = true;
+                                machine.floppy_controller.motor_on = true;
                             }
                         }
                     }
                     Command::SelectDiskB => {
-                        if let Some(path) = screen.prompt(&mut machine, "File to load in Drive B") {
+                        if has_hard_disk {
+                            screen.message(&mut machine, "Kaypro 10 has only one floppy drive (C:)");
+                        } else if let Some(path) = screen.prompt(&mut machine, "File to load in Drive B") {
                             let res = machine.floppy_controller.media_b_mut().load_disk(path.as_str());
                             if let Err(err) = res {
                                 screen.message(&mut machine, &err.to_string())

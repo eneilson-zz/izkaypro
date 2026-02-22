@@ -318,7 +318,9 @@ impl KayproMachine {
             self.floppy_controller.set_drive(d);
         }
 
-        let motor_on = bits & 0x10 != 0;
+        // On Kaypro 10 the floppy motor is auto-started by drive selection;
+        // the 81-478c ROM never sets bit 4. On other models, bit 4 controls it.
+        let motor_on = if self.hard_disk.is_some() { true } else { bits & 0x10 != 0 };
         self.floppy_controller.set_motor(motor_on);
 
         let single_density = bits & 0x20 != 0;
@@ -327,6 +329,16 @@ impl KayproMachine {
         // Side select inverted: bit 2 = 1 means side 0, bit 2 = 0 means side 1
         let side_2 = bits & 0x04 == 0;
         self.floppy_controller.set_side(side_2);
+
+        // Log port 0x14 writes to FDC trace file for debugging
+        if let Some(ref mut f) = self.floppy_controller.trace_file {
+            use std::io::Write;
+            let _ = writeln!(f, "PORT14: 0x{:02X} bank={} motor={} sd={} side={} drv={:?} sasi_mr={}",
+                bits,
+                if bits & 0x80 != 0 { "ROM" } else { "RAM" },
+                motor_on, single_density, if side_2 { 1 } else { 0 },
+                drive, bit1);
+        }
 
         if self.trace_system_bits {
             print_system_bits(self.system_bits);
