@@ -13,6 +13,10 @@ pub enum Drive {
 
 pub struct FloppyController {
     pub motor_on: bool,
+    /// Whether a floppy disk is physically in the drive. Controls the
+    /// WD1793 NOT READY status bit. Default true; set false for Kaypro 10
+    /// with HD boot and no user-specified floppy.
+    pub disk_in_drive: bool,
     pub drive: u8,
     side_2: bool,
     track: u8,           // Track register (software-accessible)
@@ -114,6 +118,7 @@ impl FloppyController {
 
         FloppyController {
             motor_on: false,
+            disk_in_drive: true,
             drive: 0,
             side_2: false,
             track: 0,
@@ -802,8 +807,9 @@ impl FloppyController {
         }
         if self.motor_on {
             status |= 0x20; // S5: Head Loaded
-        } else {
-            status |= FDCStatus::NotReady as u8; // S7: drive not ready
+        }
+        if !self.disk_in_drive {
+            status |= FDCStatus::NotReady as u8; // S7: no disk in drive
         }
         status
     }

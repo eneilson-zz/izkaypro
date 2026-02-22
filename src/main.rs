@@ -212,6 +212,14 @@ fn main() {
     );
     machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
 
+    // Kaypro 10 boot priority: the ROM checks FDC NOT READY at power-on.
+    // NOT READY → HD boot, READY → floppy boot. Set disk_in_drive=false
+    // when HD is present and no user floppy was specified, so the ROM
+    // boots from the hard disk.
+    if has_hard_disk && cli.drivea.is_none() {
+        machine.floppy_controller.disk_in_drive = false;
+    }
+
     // Load hard disk image if specified
     if let Some(ref hd_path) = cli.hd {
         if let Some(ref mut hd) = machine.hard_disk {

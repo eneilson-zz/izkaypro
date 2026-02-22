@@ -579,6 +579,11 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         false, false, false, false, false, false,
     );
 
+    // No floppy in drive when booting from HD (ROM checks NOT READY for boot priority)
+    if cfg.has_hard_disk && cfg.hd_image.is_some() {
+        machine.floppy_controller.disk_in_drive = false;
+    }
+
     // Load HD image if specified (copy to temp file to avoid modifying original)
     let hd_tmp_path: Option<std::path::PathBuf> = if let Some(hd_src) = cfg.hd_image {
         let tmp = std::env::temp_dir()
