@@ -147,10 +147,19 @@ fn main() {
         config.get_description()
     );
 
-    let disk_a_path = config.disk_a.clone()
-        .unwrap_or_else(|| config.get_default_disk_a().to_string());
-    let disk_b_path = config.disk_b.clone()
-        .unwrap_or_else(|| config.get_default_disk_b().to_string());
+    // Kaypro 10 has no floppies by default (HD boot); only load if user specified
+    let disk_a_path = if config.model == KayproModel::Kaypro10 {
+        config.disk_a.clone().unwrap_or_default()
+    } else {
+        config.disk_a.clone()
+            .unwrap_or_else(|| config.get_default_disk_a().to_string())
+    };
+    let disk_b_path = if config.model == KayproModel::Kaypro10 {
+        config.disk_b.clone().unwrap_or_default()
+    } else {
+        config.disk_b.clone()
+            .unwrap_or_else(|| config.get_default_disk_b().to_string())
+    };
 
     let has_trace_log = cli.trace_log.is_some();
     let mut trace_cpu = cli.cpu_trace || cli.trace_all;
@@ -220,8 +229,15 @@ fn main() {
         machine.floppy_controller.disk_in_drive = false;
     }
 
-    // Load hard disk image if specified
-    if let Some(ref hd_path) = cli.hd {
+    // Load hard disk image: use --hd path if specified, otherwise use default for Kaypro 10
+    let hd_path = cli.hd.clone().or_else(|| {
+        if config.model == KayproModel::Kaypro10 {
+            Some("disks/system/kaypro10.hd".to_string())
+        } else {
+            None
+        }
+    });
+    if let Some(ref hd_path) = hd_path {
         if let Some(ref mut hd) = machine.hard_disk {
             match hd.load_image(hd_path) {
                 Ok(()) => {},
