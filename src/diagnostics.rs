@@ -495,6 +495,7 @@ pub struct BootTestConfig {
     pub disk_b: &'static str,
     pub side1_sector_base: u8,
     pub has_hard_disk: bool,
+    pub hd_image: Option<&'static str>,
 }
 
 /// Run boot tests for all supported Kaypro models.
@@ -512,6 +513,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-rom149-blank.img",
             side1_sector_base: 10,
             has_hard_disk: false,
+            hd_image: None,
         },
         BootTestConfig {
             name: "Kaypro 4/84 (81-292a)",
@@ -522,6 +524,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: false,
+            hd_image: None,
         },
         BootTestConfig {
             name: "Kaypro 4/84 TurboROM",
@@ -532,6 +535,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: false,
+            hd_image: None,
         },
         BootTestConfig {
             name: "KayPLUS 84",
@@ -542,6 +546,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 0,
             has_hard_disk: false,
+            hd_image: None,
         },
         BootTestConfig {
             name: "Kaypro 10 (81-478c)",
@@ -552,6 +557,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: true,
+            hd_image: Some("disks/system/turborom.hd"),
         },
     ];
 
@@ -573,21 +579,31 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         false, false, false, false, false, false,
     );
 
-    // For Kaypro 10: create a blank HD image in a temp file.
-    // The ROM should detect no valid system on the blank HD and fall back
-    // to floppy boot. This is the critical boot path we're testing.
-    let hd_tmp_path;
-    if cfg.has_hard_disk {
-        let path = std::env::temp_dir()
+    // Load HD image if specified (copy to temp file to avoid modifying original)
+    let hd_tmp_path: Option<std::path::PathBuf> = if let Some(hd_src) = cfg.hd_image {
+        let tmp = std::env::temp_dir()
             .join(format!("izkaypro_boot_test_{}.hd", std::process::id()));
-        hd_tmp_path = Some(path.clone());
-        if let Some(ref mut hd) = machine.hard_disk {
-            hd.load_image(path.to_str().unwrap())
-                .expect("failed to init blank HD image");
+        if let Err(e) = std::fs::copy(hd_src, &tmp) {
+            return TestResult {
+                name: format!("Boot {}", cfg.name),
+                passed: false,
+                message: format!("Failed to copy HD image '{}': {}", hd_src, e),
+            };
         }
+        if let Some(ref mut hd) = machine.hard_disk {
+            if let Err(e) = hd.load_image(tmp.to_str().unwrap()) {
+                let _ = std::fs::remove_file(&tmp);
+                return TestResult {
+                    name: format!("Boot {}", cfg.name),
+                    passed: false,
+                    message: format!("Failed to load HD image: {}", e),
+                };
+            }
+        }
+        Some(tmp)
     } else {
-        hd_tmp_path = None;
-    }
+        None
+    };
 
     let mut cpu = Cpu::new_z80();
 

@@ -508,13 +508,17 @@ impl FloppyController {
                 self.finish_write_track();
             }
 
-            // Terminate current command
+            // Terminate current command; status reflects Type I format
             self.read_index = 0;
             self.read_last = 0;
             self.data_buffer.clear();
             self.multi_sector = false;
             self.read_address_countdown = 0;
-            self.status &= !(FDCStatus::Busy as u8);
+            let mut base = FDCStatus::NoError as u8;
+            if self.head_position == 0 {
+                base |= FDCStatus::LostDataOrTrack0 as u8;
+            }
+            self.status = self.type_i_status(base);
 
             // I3: Immediate interrupt
             // I0-I2: Conditional interrupts (not-ready, ready-to-not-ready, index pulse)
@@ -798,6 +802,8 @@ impl FloppyController {
         }
         if self.motor_on {
             status |= 0x20; // S5: Head Loaded
+        } else {
+            status |= FDCStatus::NotReady as u8; // S7: drive not ready
         }
         status
     }
