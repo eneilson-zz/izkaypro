@@ -65,6 +65,11 @@ impl Keyboard {
         *self.key_buffer.first().unwrap_or(&0)
     }
 
+    /// Inject keys into the keyboard buffer (for headless/automated testing)
+    pub fn inject_keys(&mut self, keys: &[u8]) {
+        self.key_buffer.extend_from_slice(keys);
+    }
+
     pub fn read_line(&mut self) -> Option<String> {
         use std::io::Write;
 
