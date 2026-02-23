@@ -369,7 +369,6 @@ fn main() {
     let mut nmi_pending = false;
     let mut nmi_deadline: u64 = 0;
     let mut done = false;
-
     // Runtime BIOS base discovery for universal ROM tracing
     let mut bios_base: Option<u16> = None;
     let mut last_rom_rank = true; // Start in ROM mode

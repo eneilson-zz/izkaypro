@@ -22,6 +22,8 @@ pub struct Keyboard {
     initial_termios: Option<Termios>,
     key_buffer: Vec<u8>,  // Buffer for queued keys
     pub commands: Vec<Command>,
+    idle_polls: u32,          // Consecutive polls with no key available
+    pub idle_sleep_enabled: bool, // false for headless/boot-test mode
 }
 
 impl Keyboard {
@@ -33,6 +35,8 @@ impl Keyboard {
             initial_termios,
             key_buffer: Vec::new(),
             commands: Vec::<Command>::new(),
+            idle_polls: 0,
+            idle_sleep_enabled: true,
         };
 
         c.setup_host_terminal(false);
@@ -52,10 +56,20 @@ impl Keyboard {
     pub fn is_key_pressed(&mut self) -> bool {
         self.consume_input();
         if self.key_buffer.is_empty() {
-            // Avoid 100% CPU usage waiting for input.
-            thread::sleep(Duration::from_nanos(100));
+            self.idle_polls = self.idle_polls.saturating_add(1);
+            if self.idle_sleep_enabled && self.idle_polls > 50_000 {
+                // Idle loop detected (e.g., CONIN polling with no input).
+                // Sleep 1ms to match real hardware polling rates and prevent
+                // ROM timeout counters from firing prematurely at unlimited speed.
+                thread::sleep(Duration::from_millis(1));
+            } else {
+                thread::sleep(Duration::from_nanos(100));
+            }
+            false
+        } else {
+            self.idle_polls = 0;
+            true
         }
-        !self.key_buffer.is_empty()
     }
 
     pub fn get_key(&mut self) -> u8 {

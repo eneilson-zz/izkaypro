@@ -579,6 +579,9 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
         false, false, false, false, false, false,
     );
 
+    // Disable idle sleep for headless boot tests (no interactive keyboard)
+    machine.keyboard.idle_sleep_enabled = false;
+
     // No floppy in drive when booting from HD (ROM checks NOT READY for boot priority)
     if cfg.has_hard_disk && cfg.hd_image.is_some() {
         machine.floppy_controller.disk_in_drive = false;
@@ -818,6 +821,7 @@ pub fn trace_turborom_hd_boot() {
         false,   // trace_rtc
         true,    // trace_hdc
     );
+    machine.keyboard.idle_sleep_enabled = false;
 
     // Load the real HD image
     let hd_path = "disks/system/kaypro10.hd";
@@ -1282,6 +1286,7 @@ pub fn debug_makturbo() {
         true,    // has_hard_disk (K10 always has it)
         false, false, false, false, false, false,
     );
+    machine.keyboard.idle_sleep_enabled = false;
 
     // Create blank HD (K10 needs one, will fall back to floppy boot)
     let hd_path = std::env::temp_dir()
@@ -1612,6 +1617,8 @@ pub fn debug_floppy_k10() {
         true,    // has_hard_disk
         false, false, false, false, false, false,
     );
+
+    machine.keyboard.idle_sleep_enabled = false;
 
     // No floppy in drive for HD boot
     machine.floppy_controller.disk_in_drive = false;
