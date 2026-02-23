@@ -8,6 +8,7 @@ pub struct Screen {
     pub show_status: bool,
     pub show_help: bool,
     machine_name: String,
+    no_border: bool,
 }
 
 #[allow(dead_code)]
@@ -28,13 +29,14 @@ const CONTROL_CHARS_81_234: [char; 32] = [
 const SHOWN_SYSTEM_BITS: u8 = 0b0110_0011;
 
 impl Screen {
-    pub fn new(in_place: bool, machine_name: &str) -> Screen {
+    pub fn new(in_place: bool, machine_name: &str, no_border: bool) -> Screen {
         Screen {
             in_place,
             last_system_bits: 0,
             show_status: false,
             show_help: false,
             machine_name: machine_name.to_string(),
+            no_border,
         }
     }
     
@@ -78,7 +80,8 @@ impl Screen {
         }
 
         if self.in_place {
-            for _ in 0..28 {
+            let scroll_lines = if self.no_border { 26 } else { 28 };
+            for _ in 0..scroll_lines {
                 println!();
             }
         }
@@ -90,15 +93,26 @@ impl Screen {
 
     pub fn message(&mut self, machine: &mut KayproMachine, message:  &str) {
         if self.in_place {
-            print!("\x1b[{}A", 14);
-            println!("//==================================================================================\\\\");
-            println!("||                                                                                  ||");
-            println!("\\\\================================================ Press enter to continue =========//");
-            print!("\x1b[{}A", 2);
-            print!("|| {} ", message);
-            stdout().flush().unwrap();
-            machine.keyboard.read_line();
-            print!("\x1b[{}B", 13);
+            if self.no_border {
+                print!("\x1b[{}A", 13);
+                println!("{:80}", "");
+                println!("{:<78}  ", message);
+                println!("{:>80}", "Press enter to continue");
+                print!("\x1b[{}A", 2);
+                stdout().flush().unwrap();
+                machine.keyboard.read_line();
+                print!("\x1b[{}B", 12);
+            } else {
+                print!("\x1b[{}A", 14);
+                println!("//==================================================================================\\\\");
+                println!("||                                                                                  ||");
+                println!("\\\\================================================ Press enter to continue =========//");
+                print!("\x1b[{}A", 2);
+                print!("|| {} ", message);
+                stdout().flush().unwrap();
+                machine.keyboard.read_line();
+                print!("\x1b[{}B", 13);
+            }
             self.update(machine, true);
         } else {
             print!("{}: ", message);
@@ -107,17 +121,31 @@ impl Screen {
 
     pub fn prompt(&mut self, machine: &mut KayproMachine, message: &str) -> Option<String> {
         if self.in_place {
-            print!("\x1b[{}A", 20);
-            println!("//==================================================================================\\\\");
-            println!("||                                                                    (ESC cancels) ||");
-            println!("\\\\==================================================================================//");
-            print!("\x1b[{}A", 2);
-            print!("|| {}: ", message);
-            stdout().flush().unwrap();
-            let line = machine.keyboard.read_line();
-            print!("\x1b[{}B", 19);
-            self.update(machine, true);
-            line
+            if self.no_border {
+                print!("\x1b[{}A", 19);
+                println!("{:80}", "");
+                println!("{:>80}", "(ESC cancels)");
+                println!("{:80}", "");
+                print!("\x1b[{}A", 2);
+                print!("{}: ", message);
+                stdout().flush().unwrap();
+                let line = machine.keyboard.read_line();
+                print!("\x1b[{}B", 18);
+                self.update(machine, true);
+                line
+            } else {
+                print!("\x1b[{}A", 20);
+                println!("//==================================================================================\\\\");
+                println!("||                                                                    (ESC cancels) ||");
+                println!("\\\\==================================================================================//");
+                print!("\x1b[{}A", 2);
+                print!("|| {}: ", message);
+                stdout().flush().unwrap();
+                let line = machine.keyboard.read_line();
+                print!("\x1b[{}B", 19);
+                self.update(machine, true);
+                line
+            }
         } else {
             print!("{} (ESC cancels): ", message);
             stdout().flush().unwrap();
@@ -145,33 +173,25 @@ impl Screen {
         } else {
             24
         };
-        let total_lines = display_rows + 2; // title + rows + footer
+        let total_lines = if self.no_border {
+            display_rows
+        } else {
+            display_rows + 2 // title + rows + footer
+        };
 
         // Move cursor up with ansi escape sequence
         if self.in_place {
             print!("\x1b[{}A", total_lines);
         }
 
-        let mut disk_status = "======".to_owned();
-        if self.show_status && machine.floppy_controller.motor_on {
-            if machine.floppy_controller.drive == 0 {
-                disk_status = " A".to_owned();
+        if !self.no_border {
+            if self.show_status {
+                let sio_status = machine.sio.status_string();
+                println!("//====Last key: 0x{:02x}=={:>40}==============\\\\",
+                    machine.keyboard.peek_key(), sio_status);
             } else {
-                disk_status = " B".to_owned();
+                println!("{}", self.format_title_line());
             }
-            if machine.floppy_controller.single_density {
-                disk_status += " SD ";
-            } else {
-                disk_status += " DD ";
-            }
-        }
-
-        if self.show_status {
-            let sio_status = machine.sio.status_string();
-            println!("//====Last key: 0x{:02x}=={:>40}==============\\\\",
-                machine.keyboard.peek_key(), sio_status);
-        } else {
-            println!("{}", self.format_title_line());
         }
         
         // Get cursor position for CRTC mode
@@ -186,7 +206,9 @@ impl Screen {
         
         // For CRTC mode, display uses linear 80-byte rows from start_addr
         for row in 0..display_rows {
-            print!("|| ");
+            if !self.no_border {
+                print!("|| ");
+            }
             for col in 0..80 {
                 let (code, attr, is_cursor) = if machine.video_mode == VideoMode::Sy6545Crtc {
                     // CRTC mode: linear 80-byte rows from start_addr (R12:R13)
@@ -226,9 +248,29 @@ impl Screen {
                 
                 print!("{}{}\x1b[0m", seq, ch);
             }
-            println!(" ||");
+            if self.no_border {
+                println!();
+            } else {
+                println!(" ||");
+            }
         }
-        println!("\\\\======{}===================================== F1 for help ==== F4 to exit ====//", disk_status);
+
+        if !self.no_border {
+            let mut disk_status = "======".to_owned();
+            if self.show_status && machine.floppy_controller.motor_on {
+                if machine.floppy_controller.drive == 0 {
+                    disk_status = " A".to_owned();
+                } else {
+                    disk_status = " B".to_owned();
+                }
+                if machine.floppy_controller.single_density {
+                    disk_status += " SD ";
+                } else {
+                    disk_status += " DD ";
+                }
+            }
+            println!("\\\\======{}===================================== F1 for help ==== F4 to exit ====//", disk_status);
+        }
 
         if self.show_help {
             self.update_help(machine)
@@ -243,28 +285,48 @@ impl Screen {
     }
 
     fn update_help (&mut self, machine: &KayproMachine) {
-        if self.in_place {
-            print!("\x1b[{}A", 21);
-        }
-        println!("||        +----------------------------------------------------------------+        ||");
-        println!("||        |  izkaypro: Kaypro II emulator for console terminals            |        ||");
-        println!("||        |----------------------------------------------------------------|        ||");
-        println!("||        |  F1: Show/hide help           | Host keys to Kaypro keys:      |        ||");
-        println!("||        |  F2: Show/hide disk status    |  Delete to DEL                 |        ||");
-        println!("||        |  F4: Quit the emulator        |  Insert to LINEFEED            |        ||");
-        println!("||        |  F5: Select file for drive A: |                                |        ||");
-        println!("||        |  F6: Select file for drive B: |                                |        ||");
-        println!("||        |  F7: Save BIOS to file        |                                |        ||");
-        println!("||        |  F8: Toggle CPU trace         |                                |        ||");
-        println!("||        |  F9: Set CPU speed (MHz)      |                                |        ||");
-        println!("||        +----------------------------------------------------------------+        ||");
-        println!("||        |  Loaded images:                                                |        ||");
-        println!("||        |  A: {:58} |        ||", machine.floppy_controller.media_a().info());
-        println!("||        |  B: {:58} |        ||", machine.floppy_controller.media_b().info());
-        println!("||        +----------------------------------------------------------------+        ||");
+        if self.no_border {
+            if self.in_place {
+                print!("\x1b[{}A", 20);
+            }
+            println!("+------------------------------------------------------------------+          ");
+            println!("| izkaypro: Kaypro emulator             F1: help  F4: quit         |          ");
+            println!("|------------------------------------------------------------------|          ");
+            println!("| F2: disk status  F5: drive A  F7: save BIOS  F9: set speed       |          ");
+            println!("| F6: drive B      F8: CPU trace                                   |          ");
+            println!("|------------------------------------------------------------------|          ");
+            println!("| Host: Delete=DEL, Insert=LINEFEED                                |          ");
+            println!("|------------------------------------------------------------------|          ");
+            println!("| A: {:74}|", machine.floppy_controller.media_a().info());
+            println!("| B: {:74}|", machine.floppy_controller.media_b().info());
+            println!("+------------------------------------------------------------------+          ");
+            if self.in_place {
+                print!("\x1b[{}B", 20-11);
+            }
+        } else {
+            if self.in_place {
+                print!("\x1b[{}A", 21);
+            }
+            println!("||        +----------------------------------------------------------------+        ||");
+            println!("||        |  izkaypro: Kaypro II emulator for console terminals            |        ||");
+            println!("||        |----------------------------------------------------------------|        ||");
+            println!("||        |  F1: Show/hide help           | Host keys to Kaypro keys:      |        ||");
+            println!("||        |  F2: Show/hide disk status    |  Delete to DEL                 |        ||");
+            println!("||        |  F4: Quit the emulator        |  Insert to LINEFEED            |        ||");
+            println!("||        |  F5: Select file for drive A: |                                |        ||");
+            println!("||        |  F6: Select file for drive B: |                                |        ||");
+            println!("||        |  F7: Save BIOS to file        |                                |        ||");
+            println!("||        |  F8: Toggle CPU trace         |                                |        ||");
+            println!("||        |  F9: Set CPU speed (MHz)      |                                |        ||");
+            println!("||        +----------------------------------------------------------------+        ||");
+            println!("||        |  Loaded images:                                                |        ||");
+            println!("||        |  A: {:58} |        ||", machine.floppy_controller.media_a().info());
+            println!("||        |  B: {:58} |        ||", machine.floppy_controller.media_b().info());
+            println!("||        +----------------------------------------------------------------+        ||");
 
-        if self.in_place {
-            print!("\x1b[{}B", 21-8);
+            if self.in_place {
+                print!("\x1b[{}B", 21-8);
+            }
         }
     }
 

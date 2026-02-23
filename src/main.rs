@@ -138,6 +138,10 @@ struct Cli {
     /// Debug Kaypro 10 floppy access after HD boot (traces to k10-floppy-debug.log)
     #[arg(long, hide = true)]
     debug_floppy_k10: bool,
+
+    /// Run without screen border (fits in 80x26 terminal)
+    #[arg(long)]
+    no_border: bool,
 }
 
 fn main() {
@@ -216,7 +220,7 @@ fn main() {
         trace_fdc,
         trace_fdc_rw,
     );
-    let mut screen = Screen::new(!any_trace, config.get_display_name());
+    let mut screen = Screen::new(!any_trace, config.get_display_name(), cli.no_border);
     let mut machine = KayproMachine::new(
         config.get_rom_path(),
         config.get_video_mode(),
