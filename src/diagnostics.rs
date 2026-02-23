@@ -1574,3 +1574,411 @@ pub fn debug_makturbo() {
 
     println!("Debug trace written to {}", log_path);
 }
+
+/// Debug Kaypro 10 floppy access after HD boot.
+/// Boots from HD, inserts floppy, switches to C:, runs DIR, then tries to
+/// load a program. Traces all BIOS/FDC operations to diagnose "Bad Sector".
+pub fn debug_floppy_k10() {
+    use iz80::*;
+    use std::io::Write;
+
+    let log_path = "k10-floppy-debug.log";
+    let fdc_log_path = "k10-floppy-debug-fdc.log";
+    let mut log = std::fs::File::create(log_path)
+        .expect("failed to create log");
+
+    let _ = writeln!(log, "=== Kaypro 10 Floppy Access Debug ===");
+    let _ = writeln!(log, "Goal: Boot from HD, insert floppy, DIR C:, run program");
+    let _ = writeln!(log, "");
+
+    // Set up FDC with the boot floppy image (contains CP/M utilities)
+    let floppy_path = "disks/system/cpm22g-rom292a.img";
+    let mut fdc = crate::floppy_controller::FloppyController::new(
+        floppy_path,
+        "disks/blank_disks/cpm22-kaypro4-blank.img",
+        crate::media::MediaFormat::DsDd,
+        10,    // side1_sector_base
+        true,  // trace FDC commands
+        true,  // trace FDC reads/writes
+    );
+    let fdc_file = std::fs::File::create(fdc_log_path)
+        .expect("failed to create FDC trace log");
+    fdc.trace_file = Some(fdc_file);
+
+    let mut machine = crate::kaypro_machine::KayproMachine::new(
+        "roms/81-478c.rom",
+        crate::kaypro_machine::VideoMode::Sy6545Crtc,
+        fdc,
+        true,    // has_hard_disk
+        false, false, false, false, false, false,
+    );
+
+    // No floppy in drive for HD boot
+    machine.floppy_controller.disk_in_drive = false;
+
+    // Copy HD image to temp file
+    let hd_src = "disks/system/kaypro10.hd";
+    let hd_path = std::env::temp_dir()
+        .join(format!("izkaypro_floppy_debug_{}.hd", std::process::id()));
+    std::fs::copy(hd_src, &hd_path).expect("failed to copy HD image");
+    if let Some(ref mut hd) = machine.hard_disk {
+        hd.load_image(hd_path.to_str().unwrap())
+            .expect("failed to load HD image");
+    }
+
+    let mut cpu = Cpu::new_z80();
+    let max_instructions: u64 = 500_000_000;
+    let mut counter: u64 = 0;
+    let mut nmi_pending = false;
+    let mut nmi_deadline: u64 = 0;
+
+    let mut bios_base: Option<u16> = None;
+    let mut last_rom_rank = true;
+
+    // State machine for injection
+    let mut phase = 0u8;  // 0=booting, 1=prompt found, 2=injected C:, 3=injected DIR, 4=done
+    let mut phase_counter: u64 = 0;
+
+    println!("Debug: Booting Kaypro 10 from HD...");
+
+    loop {
+        cpu.execute_instruction(&mut machine);
+        counter += 1;
+
+        // BIOS base discovery
+        let in_rom = machine.is_rom_rank();
+        if in_rom != last_rom_rank {
+            last_rom_rank = in_rom;
+            if !in_rom && bios_base.is_none() {
+                let warm_lo = machine.peek(0x0001) as u16;
+                let warm_hi = machine.peek(0x0002) as u16;
+                let warm_boot = (warm_hi << 8) | warm_lo;
+                if warm_boot > 0x100 && warm_boot < 0xFFFF {
+                    bios_base = Some(warm_boot - 3);
+                    let _ = writeln!(log, "[{:>10}] BIOS base: 0x{:04X}", counter, warm_boot - 3);
+                }
+            }
+        }
+
+        // BIOS entry tracing (after base discovered)
+        if !in_rom {
+            if let Some(base) = bios_base {
+                let pc = cpu.registers().pc();
+                if pc >= base && pc <= base + 51 && (pc - base) % 3 == 0 {
+                    let entry = (pc - base) / 3;
+                    let msg: Option<String> = match entry {
+                        0 => Some("BOOT".into()),
+                        1 => Some("WBOOT".into()),
+                        8 => Some("HOME".into()),
+                        9 => Some(format!("SELDSK drive={} ({})",
+                            cpu.registers().get8(Reg8::C),
+                            (b'A' + cpu.registers().get8(Reg8::C)) as char)),
+                        10 => Some(format!("SETTRK track={}",
+                            cpu.registers().get8(Reg8::C))),
+                        11 => Some(format!("SETSEC sector={}",
+                            cpu.registers().get8(Reg8::C))),
+                        12 => Some(format!("SETDMA addr=0x{:04X}",
+                            cpu.registers().get16(Reg16::BC))),
+                        13 => Some("READ".into()),
+                        14 => Some("WRITE".into()),
+                        16 => {
+                            let sec = cpu.registers().get16(Reg16::BC);
+                            let xlt = cpu.registers().get16(Reg16::DE);
+                            Some(format!("SECTRAN sector={} xlt=0x{:04X}", sec, xlt))
+                        },
+                        _ => None,
+                    };
+                    if let Some(m) = msg {
+                        let _ = writeln!(log, "[{:>10}] BIOS: {}", counter, m);
+                        let _ = log.flush();
+                    }
+                }
+            }
+        }
+
+        // BDOS tracing
+        if !in_rom && cpu.registers().pc() == 0x0005 {
+            let command = cpu.registers().get8(Reg8::C);
+            if command != 6 { // skip C_RAWIO
+                let args = cpu.registers().get16(Reg16::DE);
+                static NAMES: &[&str] = &[
+                    "P_TERMCPM", "C_READ", "C_WRITE", "A_READ", "A_WRITE",
+                    "L_WRITE", "C_RAWIO", "A_STATIN", "A_STATOUT", "C_WRITESTR",
+                    "C_READSTR", "C_STAT", "S_BDOSVER", "DRV_ALLRESET", "DRV_SET",
+                    "F_OPEN", "F_CLOSE", "F_SFIRST", "F_SNEXT", "F_DELETE",
+                    "F_READ", "F_WRITE", "F_MAKE", "F_RENAME", "DRV_LOGINVEC",
+                    "DRV_GET", "F_DMAOFF", "DRV_ALLOCVEC", "DRV_SETRO", "DRV_ROVEC",
+                    "F_ATTRIB", "DRV_DPB", "F_USERNUM", "F_READRAND", "F_WRITERAND",
+                    "F_SIZE", "F_RANDREC", "DRV_RESET",
+                ];
+                let name = if (command as usize) < NAMES.len() {
+                    NAMES[command as usize]
+                } else { "?" };
+                let _ = writeln!(log, "[{:>10}] BDOS {}: {}(0x{:04X})", counter, command, name, args);
+                // Dump FCB for file operations
+                if command == 15 || command == 17 || command == 22 || command == 20 {
+                    let fcb_drive = machine.peek(args);
+                    let mut filename = String::new();
+                    for i in 1..=11u16 {
+                        let ch = machine.peek(args.wrapping_add(i)) & 0x7F;
+                        if ch >= 0x20 { filename.push(ch as char); }
+                    }
+                    let _ = writeln!(log, "[{:>10}]   FCB: drive={} file=\"{}\"",
+                        counter, fcb_drive, filename.trim());
+                }
+                let _ = log.flush();
+            }
+        }
+
+        // SIO interrupt processing
+        if counter % 1024 == 0 {
+            let i_reg = cpu.registers().get8(Reg8::I);
+            if let Some(handler) = machine.sio_check_interrupt(i_reg) {
+                let regs = cpu.registers();
+                let pc = regs.pc();
+                let mut sp = regs.get16(Reg16::SP);
+                sp = sp.wrapping_sub(2);
+                regs.set16(Reg16::SP, sp);
+                machine.poke(sp, pc as u8);
+                machine.poke(sp.wrapping_add(1), (pc >> 8) as u8);
+                cpu.registers().set_pc(handler);
+            }
+        }
+
+        // NMI processing
+        if machine.floppy_controller.raise_nmi {
+            machine.floppy_controller.raise_nmi = false;
+            nmi_pending = true;
+            nmi_deadline = counter + 10_000_000;
+        }
+        let mut nmi_signaled = false;
+        if nmi_pending && (cpu.is_halted()
+            || (counter >= nmi_deadline && machine.nmi_vector_is_safe()))
+        {
+            cpu.signal_nmi();
+            nmi_pending = false;
+            nmi_signaled = true;
+        }
+        if !nmi_signaled && cpu.is_halted() {
+            let _ = writeln!(log, "[{:>10}] HALT at PC=0x{:04X}", counter, cpu.registers().pc());
+            break;
+        }
+
+        // Phase state machine
+        if counter % 100_000 == 0 {
+            match phase {
+                0 => {
+                    // Wait for A> prompt
+                    if check_for_prompt(&machine) {
+                        phase = 1;
+                        phase_counter = counter;
+                        let _ = writeln!(log, "\n[{:>10}] === A> prompt detected ===", counter);
+
+                        // Dump BIOS DPH/DPB info
+                        if let Some(base) = bios_base {
+                            let _ = writeln!(log, "\n--- BIOS Jump Table at 0x{:04X} ---", base);
+                            let names = ["BOOT", "WBOOT", "CONST", "CONIN", "CONOUT", "LIST",
+                                "PUNCH", "READER", "HOME", "SELDSK", "SETTRK", "SETSEC",
+                                "SETDMA", "READ", "WRITE", "LISTST", "SECTRAN"];
+                            for (i, name) in names.iter().enumerate() {
+                                let addr = base + (i as u16) * 3;
+                                let target_lo = machine.peek(addr + 1) as u16;
+                                let target_hi = machine.peek(addr + 2) as u16;
+                                let target = (target_hi << 8) | target_lo;
+                                let _ = writeln!(log, "  {:8} -> 0x{:04X}", name, target);
+                            }
+
+                            // Scan for floppy DPB (SPT=40, BSH=3 or 4)
+                            let _ = writeln!(log, "\n--- DPB Scan (floppy: SPT=40) ---");
+                            for addr in (0x100u32..0xFE00).step_by(2) {
+                                let spt = machine.peek(addr as u16) as u16
+                                    | ((machine.peek((addr + 1) as u16) as u16) << 8);
+                                let bsh = machine.peek((addr + 2) as u16);
+                                let blm = machine.peek((addr + 3) as u16);
+                                if spt == 40 && (bsh == 3 || bsh == 4) && (blm == 7 || blm == 15) {
+                                    let exm = machine.peek((addr + 4) as u16);
+                                    let dsm = machine.peek((addr + 5) as u16) as u16
+                                        | ((machine.peek((addr + 6) as u16) as u16) << 8);
+                                    let drm = machine.peek((addr + 7) as u16) as u16
+                                        | ((machine.peek((addr + 8) as u16) as u16) << 8);
+                                    let al0 = machine.peek((addr + 9) as u16);
+                                    let al1 = machine.peek((addr + 10) as u16);
+                                    let cks = machine.peek((addr + 11) as u16) as u16
+                                        | ((machine.peek((addr + 12) as u16) as u16) << 8);
+                                    let off = machine.peek((addr + 13) as u16) as u16
+                                        | ((machine.peek((addr + 14) as u16) as u16) << 8);
+                                    let _ = writeln!(log, "  DPB at 0x{:04X}: SPT={} BSH={} BLM={} EXM={} DSM={} DRM={} AL={:02X}/{:02X} CKS={} OFF={}",
+                                        addr, spt, bsh, blm, exm, dsm, drm, al0, al1, cks, off);
+                                }
+                            }
+
+                            // Scan for SECTRAN table (XLT) - look for 16/32 byte sequences containing sector mapping
+                            let _ = writeln!(log, "\n--- SECTRAN XLT table scan ---");
+                            // The SELDSK function returns HL=DPH pointer
+                            // DPH: bytes 0-1 = XLT pointer (sector translation table)
+                            // If XLT is 0x0000, no translation (1:1 mapping)
+                            // Scan for DPH structures by looking for plausible XLT pointers
+                            // near BIOS area
+                            let seldsk_target = machine.peek(base + 28) as u16
+                                | ((machine.peek(base + 29) as u16) << 8);
+                            let _ = writeln!(log, "  SELDSK handler at 0x{:04X}", seldsk_target);
+                            // Dump 128 bytes around SELDSK handler
+                            let _ = write!(log, "  SELDSK code:");
+                            for i in 0..64u16 {
+                                if i % 16 == 0 { let _ = write!(log, "\n    {:04X}:", seldsk_target + i); }
+                                let _ = write!(log, " {:02X}", machine.peek(seldsk_target + i));
+                            }
+                            let _ = writeln!(log);
+                        }
+
+                        // Dump drive type table at FFF4-FFF7
+                        {
+                            let _ = writeln!(log, "\n--- Drive type table FFF4-FFF7 ---");
+                            for i in 0..4u16 {
+                                let addr = 0xFFF4 + i;
+                                let val = machine.peek(addr);
+                                let drive_letter = (b'A' + i as u8) as char;
+                                let type_bits = val & 0x0C;
+                                let type_name = match type_bits {
+                                    0x00 => "SSSD floppy",
+                                    0x04 => "SSDD floppy",
+                                    0x08 => "DSDD/HD",
+                                    0x0C => "invalid",
+                                    _ => "?",
+                                };
+                                let _ = writeln!(log, "  FFF{:X}: 0x{:02X} (Drive {}) type={} bit6={} bit0={}",
+                                    4 + i, val, drive_letter, type_name,
+                                    if val & 0x40 != 0 { "set" } else { "clear" },
+                                    val & 0x01);
+                            }
+                        }
+
+                        // Dump BIOS dispatch code at 0xEF74 (256 bytes)
+                        if let Some(base) = bios_base {
+                            let _ = writeln!(log, "\n--- BIOS dispatch code at 0xEF74 ---");
+                            for row in 0..16u16 {
+                                let addr = 0xEF74 + row * 16;
+                                let _ = write!(log, "  {:04X}:", addr);
+                                for col in 0..16u16 {
+                                    let _ = write!(log, " {:02X}", machine.peek(addr + col));
+                                }
+                                let _ = writeln!(log);
+                            }
+
+                            // Dump BIOS READ handler area
+                            let read_target = machine.peek(base + 40) as u16
+                                | ((machine.peek(base + 41) as u16) << 8);
+                            let _ = writeln!(log, "\n--- BIOS READ handler at 0x{:04X} ---", read_target);
+                            for row in 0..16u16 {
+                                let addr = read_target + row * 16;
+                                let _ = write!(log, "  {:04X}:", addr);
+                                for col in 0..16u16 {
+                                    let _ = write!(log, " {:02X}", machine.peek(addr + col));
+                                }
+                                let _ = writeln!(log);
+                            }
+
+                            // Dump 0xF000-0xF200 (likely contains floppy read/write routines)
+                            let _ = writeln!(log, "\n--- BIOS area 0xEE00-0xF200 ---");
+                            for row in 0..((0xF200u16 - 0xEE00) / 16) {
+                                let addr = 0xEE00 + row * 16;
+                                let _ = write!(log, "  {:04X}:", addr);
+                                for col in 0..16u16 {
+                                    let _ = write!(log, " {:02X}", machine.peek(addr + col));
+                                }
+                                // ASCII
+                                let _ = write!(log, "  ");
+                                for col in 0..16u16 {
+                                    let b = machine.peek(addr + col);
+                                    let c = if b >= 0x20 && b < 0x7F { b as char } else { '.' };
+                                    let _ = write!(log, "{}", c);
+                                }
+                                let _ = writeln!(log);
+                            }
+                        }
+
+                        println!("Debug: A> prompt found, inserting floppy and switching to C:");
+                    }
+                }
+                1 => {
+                    // Wait a bit, then insert floppy and type C: + CR
+                    if counter > phase_counter + 2_000_000 {
+                        machine.floppy_controller.disk_in_drive = true;
+
+                        // The ROM cached the floppy drive type as SSDD (0x05) at boot
+                        // because disk_in_drive was false (NOT READY). Now that a DSDD
+                        // floppy is inserted, patch the drive type at 0xFFF6 to DSDD
+                        // (0x09) so the ROM uses the correct track/side/sector mapping.
+                        let old_type = machine.peek(0xFFF6);
+                        machine.poke(0xFFF6, 0x09);
+                        let _ = writeln!(log, "\n[{:>10}] === Inserting floppy, patching drive type 0xFFF6: 0x{:02X} -> 0x09, typing C: ===", counter, old_type);
+
+                        machine.keyboard.inject_keys(b"C:\r");
+                        phase = 2;
+                        phase_counter = counter;
+                    }
+                }
+                2 => {
+                    // Wait for C> prompt, then DIR
+                    if counter > phase_counter + 5_000_000 {
+                        let vram = extract_vram_text(&machine, 24);
+                        let _ = writeln!(log, "\n[{:>10}] VRAM after C:  ==>", counter);
+                        for (i, line) in vram.split('|').enumerate() {
+                            let t = line.trim_end();
+                            if !t.is_empty() && t.chars().any(|c| c != '.') {
+                                let _ = writeln!(log, "  {:2}: {}", i, t);
+                            }
+                        }
+                        let _ = writeln!(log, "\n[{:>10}] === Typing DIR ===", counter);
+                        machine.keyboard.inject_keys(b"DIR\r");
+                        phase = 3;
+                        phase_counter = counter;
+                    }
+                }
+                3 => {
+                    // Wait for DIR output, then try loading a program
+                    if counter > phase_counter + 20_000_000 {
+                        let vram = extract_vram_text(&machine, 24);
+                        let _ = writeln!(log, "\n[{:>10}] VRAM after DIR ==>", counter);
+                        for (i, line) in vram.split('|').enumerate() {
+                            let t = line.trim_end();
+                            if !t.is_empty() && t.chars().any(|c| c != '.') {
+                                let _ = writeln!(log, "  {:2}: {}", i, t);
+                            }
+                        }
+                        // Now try to load a program (STAT is usually small)
+                        let _ = writeln!(log, "\n[{:>10}] === Typing STAT ===", counter);
+                        machine.keyboard.inject_keys(b"STAT\r");
+                        phase = 4;
+                        phase_counter = counter;
+                    }
+                }
+                4 => {
+                    // Wait for result
+                    if counter > phase_counter + 30_000_000 {
+                        let vram = extract_vram_text(&machine, 24);
+                        let _ = writeln!(log, "\n[{:>10}] VRAM after STAT ==>", counter);
+                        for (i, line) in vram.split('|').enumerate() {
+                            let t = line.trim_end();
+                            if !t.is_empty() && t.chars().any(|c| c != '.') {
+                                let _ = writeln!(log, "  {:2}: {}", i, t);
+                            }
+                        }
+                        phase = 5;
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        if counter >= max_instructions {
+            let _ = writeln!(log, "\n[{:>10}] === Timed out ===", counter);
+            break;
+        }
+    }
+
+    let _ = log.flush();
+    let _ = std::fs::remove_file(&hd_path);
+
+    println!("Debug trace written to {} and {}", log_path, fdc_log_path);
+}

@@ -398,7 +398,12 @@ impl FloppyController {
             }
 
             let side_2 = self.side_2;
-            let track = self.head_position; // Use physical head position for disk access
+            // Use the track register for sector lookup, not head_position.
+            // On a real WD1793, READ SECTOR matches sector ID fields against
+            // the Track Register. The Kaypro 10 HD BIOS dispatches floppy I/O
+            // through the ROM, which may SEEK to a wrong physical track but
+            // then set the track register to the correct value.
+            let track = self.track;
             let sector = self.sector;
             let (valid, index, last) =  self.media_selected().sector_index(side_2, track, sector);
             if valid {
@@ -455,7 +460,10 @@ impl FloppyController {
             }
 
             let side_2 = self.side_2;
-            let track = self.head_position; // Use physical head position for disk access
+            // Use the track register for sector lookup, not head_position.
+            // Same as READ SECTOR: the WD1793 matches sector ID fields
+            // against the Track Register, not the physical head position.
+            let track = self.track;
             let sector = self.sector;
             let (valid, index, last) =  self.media_selected().sector_index(side_2, track, sector);
             if valid {
@@ -487,7 +495,7 @@ impl FloppyController {
                 self.sector = self.head_position;
                 self.data_buffer.clear();
                 self.data_buffer.push(self.head_position);
-                self.data_buffer.push(0);
+                self.data_buffer.push(side_2 as u8);
                 self.data_buffer.push(sector_id);
                 self.data_buffer.push(2);
                 self.data_buffer.push(0xde);

@@ -134,6 +134,10 @@ struct Cli {
     /// Debug MAKTURBO on Kaypro 10 (headless, traces to makturbo-debug.log)
     #[arg(long, hide = true)]
     debug_makturbo: bool,
+
+    /// Debug Kaypro 10 floppy access after HD boot (traces to k10-floppy-debug.log)
+    #[arg(long, hide = true)]
+    debug_floppy_k10: bool,
 }
 
 fn main() {
@@ -309,6 +313,12 @@ fn main() {
         return;
     }
 
+    // Debug Kaypro 10 floppy access if requested
+    if cli.debug_floppy_k10 {
+        diagnostics::debug_floppy_k10();
+        return;
+    }
+
     // Run diagnostics if requested
     if run_diag {
         println!("{}", welcome);
@@ -439,6 +449,19 @@ fn main() {
                             } else {
                                 machine.floppy_controller.disk_in_drive = true;
                                 machine.floppy_controller.motor_on = true;
+                                // Kaypro 10: the ROM cached the floppy drive type at
+                                // boot when no disk was present (defaulting to SSDD).
+                                // Patch the drive type table at 0xFFF6 to match the
+                                // actual format of the inserted disk image.
+                                if has_hard_disk {
+                                    let format = machine.floppy_controller.media_a().format;
+                                    let type_byte = match format {
+                                        media::MediaFormat::DsDd => 0x09,
+                                        media::MediaFormat::SsDd => 0x05,
+                                        _ => 0x01,
+                                    };
+                                    machine.poke(0xFFF6, type_byte);
+                                }
                             }
                         }
                     }
@@ -591,6 +614,7 @@ fn main() {
                             if let Some(ref mut f) = trace_log {
                                 use std::io::Write;
                                 let _ = writeln!(f, "[{:>10}] BIOS: {}", counter, m);
+                                let _ = f.flush();
                             } else {
                                 println!("BIOS: {}", m);
                             }
@@ -626,6 +650,7 @@ fn main() {
                         let _ = writeln!(f, "[{:>10}]   FCB: drive={} file=\"{}\"",
                             counter, fcb_drive, filename.trim());
                     }
+                    let _ = f.flush();
                 } else {
                     println!("BDOS command {}: {}({:04x})", command, name, args);
                 }
