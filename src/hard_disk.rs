@@ -415,10 +415,15 @@ impl HardDisk {
             7 => return self.read_status(), // has its own trace
             _ => 0xFF,
         };
-        if self.trace && reg <= 1 {
+        if self.trace {
             let name = match reg {
                 0 => "Data",
                 1 => "Error",
+                2 => "SectorCount",
+                3 => "SectorNum",
+                4 => "CylLow",
+                5 => "CylHigh",
+                6 => "SDH",
                 _ => "",
             };
             hdc_log!(self.trace_file, "HDC: Read {} = 0x{:02X}", name, val);

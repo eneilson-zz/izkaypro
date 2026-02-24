@@ -123,21 +123,9 @@ struct Cli {
     #[arg(long)]
     boot_test: bool,
 
-    /// Trace TurboROM+HD boot sequence (debug diagnostic)
-    #[arg(long, hide = true)]
-    trace_turborom_hd: bool,
-
     /// Write HDC/ROM/BDOS traces to a log file (screen keeps working)
     #[arg(long, value_name = "FILE")]
     trace_log: Option<String>,
-
-    /// Debug MAKTURBO on Kaypro 10 (headless, traces to makturbo-debug.log)
-    #[arg(long, hide = true)]
-    debug_makturbo: bool,
-
-    /// Debug Kaypro 10 floppy access after HD boot (traces to k10-floppy-debug.log)
-    #[arg(long, hide = true)]
-    debug_floppy_k10: bool,
 
     /// Run without screen border (fits in 80x26 terminal)
     #[arg(long)]
@@ -278,14 +266,20 @@ fn main() {
             log_path.strip_suffix(".log").unwrap_or(log_path));
         if let Some(ref mut hd) = machine.hard_disk {
             let hdc_file = std::fs::File::create(&hdc_log_path)
-                .expect("failed to create HDC trace log");
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to create HDC trace log '{}': {}", hdc_log_path, e);
+                    std::process::exit(1);
+                });
             hd.set_trace_file(hdc_file);
         }
         // FDC-level traces go to a companion file with "-fdc" suffix
         let fdc_log_path = format!("{}-fdc.log",
             log_path.strip_suffix(".log").unwrap_or(log_path));
         let fdc_file = std::fs::File::create(&fdc_log_path)
-            .expect("failed to create FDC trace log");
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to create FDC trace log '{}': {}", fdc_log_path, e);
+                std::process::exit(1);
+            });
         machine.floppy_controller.trace_file = Some(fdc_file);
         eprintln!("Tracing ROM/BDOS to {}", log_path);
         eprintln!("Tracing HDC registers to {}", hdc_log_path);
@@ -303,24 +297,6 @@ fn main() {
         diagnostics::print_results(&results);
         let all_passed = results.iter().all(|r| r.passed);
         std::process::exit(if all_passed { 0 } else { 1 });
-    }
-
-    // Trace TurboROM+HD boot if requested
-    if cli.trace_turborom_hd {
-        diagnostics::trace_turborom_hd_boot();
-        return;
-    }
-
-    // Debug MAKTURBO if requested
-    if cli.debug_makturbo {
-        diagnostics::debug_makturbo();
-        return;
-    }
-
-    // Debug Kaypro 10 floppy access if requested
-    if cli.debug_floppy_k10 {
-        diagnostics::debug_floppy_k10();
-        return;
     }
 
     // Run diagnostics if requested
