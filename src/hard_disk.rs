@@ -94,9 +94,9 @@ pub struct HardDisk {
     // for strict spec compliance.
     intrq: bool,
 
-    // Which LUN (drive select, SDH bits 4:3) is the connected drive.
-    // Only this LUN reports READY. Default 1 for Kaypro 10/TurboROM.
-    configured_lun: u8,
+    // Bitmask of LUNs (drive select, SDH bits 4:3) that report READY and
+    // accept commands. Default is LUN1 only (bit 1), matching Kaypro 10.
+    ready_lun_mask: u8,
 
     // Data transfer buffer and state
     data_buf: Vec<u8>,
@@ -141,7 +141,7 @@ impl HardDisk {
             reset_pending: false,
             busy_countdown: 0,
             intrq: false,
-            configured_lun: 1,
+            ready_lun_mask: 1 << 1,
             data_buf: vec![0u8; 1024 + 4], // max sector size (1024) + 4 ECC bytes
             data_length: SECTOR_SIZE,
             data_ix: 0,
@@ -166,13 +166,13 @@ impl HardDisk {
             // Pad or truncate to expected size to prevent out-of-bounds access
             data.resize(DISK_SIZE, 0);
             self.disk_data = data;
-            // Detect which tracks are formatted: on real hardware an
-            // unformatted surface is all zeros (no flux transitions).
-            // A track with any non-zero byte has been formatted/written.
-            self.track_formatted = self.detect_formatted_tracks();
-            let formatted_count = self.track_formatted.iter().filter(|&&f| f).count();
-            eprintln!("HDC: Loaded hard disk image: {} ({} bytes, {}/{} tracks formatted)",
-                path, self.disk_data.len(), formatted_count, NUM_TRACKS);
+            // An existing image has been through HDFMT which formats all
+            // tracks. Mark every track as formatted so READ/WRITE succeed
+            // everywhere. (The old heuristic — check for non-zero bytes —
+            // fails for tracks that were formatted but never written.)
+            self.track_formatted = vec![true; NUM_TRACKS];
+            eprintln!("HDC: Loaded hard disk image: {} ({} bytes)",
+                path, self.disk_data.len());
             self.file = Some(file);
         } else {
             let mut file = File::create(path)?;
@@ -193,10 +193,22 @@ impl HardDisk {
         self.trace_file = Some(file);
     }
 
+    /// Configure which LUNs report READY and accept commands.
+    /// Bit N corresponds to LUN N (0..3).
+    #[allow(dead_code)]
+    pub fn set_ready_lun_mask(&mut self, mask: u8) {
+        self.ready_lun_mask = mask & 0x0F;
+    }
+
+    fn lun_is_ready(&self, lun: u8) -> bool {
+        self.drive_present && (self.ready_lun_mask & (1u8 << lun)) != 0
+    }
+
     /// Scan disk_data to determine which tracks contain data (formatted).
     /// On real hardware, an unformatted track has no flux transitions
     /// (all zeros in our representation). Any non-zero byte means the
     /// track has been formatted and written with sector headers.
+    #[allow(dead_code)]
     fn detect_formatted_tracks(&self) -> Vec<bool> {
         let mut formatted = vec![false; NUM_TRACKS];
         for track_idx in 0..NUM_TRACKS {
@@ -370,8 +382,8 @@ impl HardDisk {
                 let lun = (value >> 3) & 0x03;
                 // Per spec: READY and SEEK COMPLETE reflect the drive's
                 // status signals. A present, spun-up drive with settled
-                // heads reports both. Only the configured LUN reports these.
-                if self.drive_present && lun == self.configured_lun {
+                // heads reports both when the selected LUN is configured.
+                if self.lun_is_ready(lun) {
                     self.status |= STS_READY | STS_SEEK_DONE;
                 } else {
                     self.status &= !(STS_READY | STS_SEEK_DONE);
@@ -445,9 +457,9 @@ impl HardDisk {
                     // status bit is NOT set (even for non-zero codes).
                     self.error = DIAG_WD2797; // 0x01: no WD2797 floppy chip
                     self.reset_pending = false;
-                    // Only set READY if the configured LUN was selected
+                    // Set READY if the selected LUN is configured
                     self.status = STS_SEEK_DONE;
-                    if self.drive_present && self.get_lun() == self.configured_lun {
+                    if self.lun_is_ready(self.get_lun()) {
                         self.status |= STS_READY;
                     }
                     if self.trace {
@@ -483,11 +495,11 @@ impl HardDisk {
             return;
         }
 
-        // Per spec: commands abort if drive not ready (wrong LUN selected)
-        if self.get_lun() != self.configured_lun {
+        // Per spec: commands abort if drive not ready (unconfigured LUN)
+        if !self.lun_is_ready(self.get_lun()) {
             if self.trace {
-                hdc_log!(self.trace_file, "HDC: Command 0x{:02X} rejected — drive not ready (LUN {} != {})",
-                    self.cur_cmd, self.get_lun(), self.configured_lun);
+                hdc_log!(self.trace_file, "HDC: Command 0x{:02X} rejected — drive not ready (LUN {} mask=0x{:X})",
+                    self.cur_cmd, self.get_lun(), self.ready_lun_mask);
             }
             self.set_error(ERR_ABORTED);
             return;
@@ -802,6 +814,18 @@ impl HardDisk {
                 let track_idx = self.get_track_index();
                 if track_idx < self.track_formatted.len() {
                     self.track_formatted[track_idx] = true;
+                }
+                // Fill formatted track data with 0xE5 (standard CP/M blank fill).
+                // This persists the "formatted" state to the image file so that
+                // detect_formatted_tracks correctly identifies it on reload.
+                let off = track_idx * TRACK_SIZE;
+                if off + TRACK_SIZE <= self.disk_data.len() {
+                    self.disk_data[off..off + TRACK_SIZE].fill(0xE5);
+                    if let Some(ref mut f) = self.file {
+                        if f.seek(SeekFrom::Start(off as u64)).is_ok() {
+                            let _ = f.write_all(&self.disk_data[off..off + TRACK_SIZE]);
+                        }
+                    }
                 }
                 if self.trace {
                     let formatted_count = self.track_formatted.iter().filter(|&&f| f).count();

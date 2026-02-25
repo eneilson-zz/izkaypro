@@ -23,6 +23,9 @@ pub enum KayproModel {
     /// Kaypro 4/84 with TurboROM 3.4 - DSDD, SY6545 CRTC
     #[serde(rename = "turbo_rom")]
     TurboRom,
+    /// Kaypro 4/84 with TurboROM 3.4 and WD hard disk controller
+    #[serde(rename = "turbo_rom_hd")]
+    TurboRomHd,
     /// Kaypro 4/84 with KayPLUS replacement BIOS - DSDD, SY6545 CRTC
     #[serde(rename = "kayplus_84")]
     KayPlus84,
@@ -173,6 +176,7 @@ impl Config {
                 "kaypro4_83" => KayproModel::Kaypro4_83,
                 "kaypro4_84" => KayproModel::Kaypro4_84,
                 "turbo_rom" => KayproModel::TurboRom,
+                "turbo_rom_hd" => KayproModel::TurboRomHd,
                 "kayplus_84" => KayproModel::KayPlus84,
                 "kaypro10" => KayproModel::Kaypro10,
                 "custom" => KayproModel::Custom,
@@ -203,6 +207,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "roms/81-232.rom",
             KayproModel::Kaypro4_84 => "roms/81-292a.rom",
             KayproModel::TurboRom => "roms/trom34.rom",
+            KayproModel::TurboRomHd => "roms/trom34.rom",
             KayproModel::KayPlus84 => "roms/kplus84.rom",
             KayproModel::Kaypro10 => "roms/81-478c.rom",
             KayproModel::Custom => self.rom_file.as_deref().unwrap_or("roms/81-292a.rom"),
@@ -216,6 +221,7 @@ impl Config {
             KayproModel::Kaypro4_83 => VideoMode::MemoryMapped,
             KayproModel::Kaypro4_84 => VideoMode::Sy6545Crtc,
             KayproModel::TurboRom => VideoMode::Sy6545Crtc,
+            KayproModel::TurboRomHd => VideoMode::Sy6545Crtc,
             KayproModel::KayPlus84 => VideoMode::Sy6545Crtc,
             KayproModel::Kaypro10 => VideoMode::Sy6545Crtc,
             KayproModel::Custom => self.video_mode.into(),
@@ -229,6 +235,7 @@ impl Config {
             KayproModel::Kaypro4_83 => MediaFormat::DsDd,
             KayproModel::Kaypro4_84 => MediaFormat::DsDd,
             KayproModel::TurboRom => MediaFormat::DsDd,
+            KayproModel::TurboRomHd => MediaFormat::DsDd,
             KayproModel::KayPlus84 => MediaFormat::DsDd,
             KayproModel::Kaypro10 => MediaFormat::DsDd,
             KayproModel::Custom => self.disk_format.into(),
@@ -254,6 +261,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "disks/system/k484-cpm22f-boot.img",
             KayproModel::Kaypro4_84 => "disks/system/cpm22g-rom292a.img",
             KayproModel::TurboRom => "disks/system/k484_turborom_63k_boot.img",
+            KayproModel::TurboRomHd => "disks/system/turborom_hd.img",
             KayproModel::KayPlus84 => "disks/system/kayplus_boot.img",
             KayproModel::Kaypro10 => "disks/system/kaypro10_boot.img",
             KayproModel::Custom => self.disk_a.as_deref().unwrap_or("disks/system/k484-cpm22f-boot.img"),
@@ -267,6 +275,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::Kaypro4_84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::TurboRom => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::TurboRomHd => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::KayPlus84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::Kaypro10 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/blank_disks/cpm22-kaypro4-blank.img"),
@@ -280,6 +289,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "Kaypro 4/83 (DSDD, 81-232 ROM)".to_string(),
             KayproModel::Kaypro4_84 => "Kaypro 2X/4/84 (DSDD, 81-292a ROM)".to_string(),
             KayproModel::TurboRom => "Kaypro 4/84 TurboROM 3.4 (DSDD)".to_string(),
+            KayproModel::TurboRomHd => "Kaypro 4/84 TurboROM 3.4 + WD Hard Disk".to_string(),
             KayproModel::KayPlus84 => "Kaypro 4/84 KayPLUS (DSDD)".to_string(),
             KayproModel::Kaypro10 => "Kaypro 10 (Hard Disk + Floppy, 81-478c ROM)".to_string(),
             KayproModel::Custom => format!("Custom ({})", self.get_rom_path()),
@@ -293,6 +303,7 @@ impl Config {
             KayproModel::Kaypro4_83 => "Kaypro 4/83",
             KayproModel::Kaypro4_84 => "Kaypro 4-84",
             KayproModel::TurboRom => "Kaypro 4-84 TurboROM",
+            KayproModel::TurboRomHd => "Kaypro 4-84 TurboROM+HD",
             KayproModel::KayPlus84 => "Kaypro 4-84 KayPLUS",
             KayproModel::Kaypro10 => "Kaypro 10",
             KayproModel::Custom => "Custom Kaypro",

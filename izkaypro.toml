@@ -6,6 +6,7 @@
 #   kaypro4_83  - Kaypro 4/83 (DSDD, 81-232 ROM, memory-mapped video)
 #   kaypro4_84  - Kaypro 2X/4/84 (DSDD, 81-292a ROM, SY6545 CRTC)
 #   turbo_rom   - Kaypro 4/84 with TurboROM 3.4 (DSDD, SY6545 CRTC)
+#   turbo_rom_hd - Kaypro 4/84 TurboROM 3.4 + WD hard disk (2 floppies + HD)
 #   kayplus_84  - Kaypro 4/84 with KayPLUS BIOS (DSDD, SY6545 CRTC)
 #   kaypro10    - Kaypro 10 (Hard disk + floppy, 81-478c Universal ROM)
 #   custom      - Use custom settings below
@@ -35,6 +36,9 @@ model = "kaypro4_84"
 
 # --- TurboROM 3.4 ---
 # model = "turbo_rom"
+
+# --- TurboROM 3.4 + WD Hard Disk ---
+# model = "turbo_rom_hd"
 
 # --- KayPLUS 84 ---
 # model = "kayplus_84"

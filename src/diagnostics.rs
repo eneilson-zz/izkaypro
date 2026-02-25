@@ -495,6 +495,7 @@ pub struct BootTestConfig {
     pub disk_b: &'static str,
     pub side1_sector_base: u8,
     pub has_hard_disk: bool,
+    pub is_kaypro10_hardware: bool,
     pub hd_image: Option<&'static str>,
 }
 
@@ -513,6 +514,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-rom149-blank.img",
             side1_sector_base: 10,
             has_hard_disk: false,
+            is_kaypro10_hardware: false,
             hd_image: None,
         },
         BootTestConfig {
@@ -524,6 +526,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: false,
+            is_kaypro10_hardware: false,
             hd_image: None,
         },
         BootTestConfig {
@@ -535,6 +538,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: false,
+            is_kaypro10_hardware: false,
             hd_image: None,
         },
         BootTestConfig {
@@ -546,6 +550,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 0,
             has_hard_disk: false,
+            is_kaypro10_hardware: false,
             hd_image: None,
         },
         BootTestConfig {
@@ -557,6 +562,7 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
             side1_sector_base: 10,
             has_hard_disk: true,
+            is_kaypro10_hardware: true,
             hd_image: Some("disks/system/kaypro10.hd"),
         },
     ];
@@ -576,6 +582,7 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
     );
     let mut machine = crate::kaypro_machine::KayproMachine::new(
         cfg.rom_path, cfg.video_mode, fdc, cfg.has_hard_disk,
+        cfg.is_kaypro10_hardware,
         false, false, false, false, false, false,
     );
 
@@ -583,7 +590,7 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
     machine.keyboard.idle_sleep_enabled = false;
 
     // No floppy in drive when booting from HD (ROM checks NOT READY for boot priority)
-    if cfg.has_hard_disk && cfg.hd_image.is_some() {
+    if cfg.is_kaypro10_hardware && cfg.hd_image.is_some() {
         machine.floppy_controller.disk_in_drive = false;
     }
 

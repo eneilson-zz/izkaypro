@@ -4,7 +4,10 @@
 
 ## What is this?
 
-This is a Kaypro emulator that runs in a terminal window on Linux, OSX, FreeBSD, and Windows.  It supports multiple Kaypro models including the Kaypro 10 with hard disk, and can boot and use SSDD or DSDD disk images.  For best display results, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
+This is a Kaypro emulator that runs in a terminal window on Linux, OSX, FreeBSD, and Windows.  It supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM and KayPLUS ROM variants.  The emulator also supports SSDD and DSDD disk images where ROM-appropriaate.  For best display results, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
+
+## Update 2/2026
+TurboROM with hard disk support is now working. Use `--model=turbo_rom_hd` to boot from a TurboROM hard disk image. The HD image must be formatted with HDFMT and have system tracks installed. Drives A and B are 5MB hard disk partitions; floppy drives are accessible via TurboMap (use F5 to insert a floppy at runtime).
 
 This is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
 
@@ -26,7 +29,7 @@ It's a typical CP/M computer of the early 80s, built on a metal case with standa
 - One parallel port (not emulated by izkaypro)
 
 ## Supported Models
-This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, KayPLUS ROM-enabled 4-84s, and the Kaypro 10 with WD1002-05 hard disk controller.
+This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, TurboROM+HD, KayPLUS ROM-enabled 4-84s, and the Kaypro 10 with WD1002-05 hard disk controller.
 
 | Model | ROM | Disk Format | Video Mode |
 |-------|-----|-------------|------------|
@@ -34,6 +37,7 @@ This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, Ka
 | Kaypro 4/83 | 81-232 | DSDD (400KB) | Memory-mapped |
 | Kaypro 2X/4/84 | 81-292a | DSDD (400KB) | SY6545 CRTC |
 | TurboROM 3.4 | trom34 | DSDD (400KB) | SY6545 CRTC |
+| TurboROM 3.4 + HD | trom34 | DSDD floppies + HD | SY6545 CRTC |
 | KayPLUS 84 | kplus84 | DSDD (400KB) | SY6545 CRTC |
 | Kaypro 10 | 81-478c | 10MB HD + DSDD floppy | SY6545 CRTC |
 
@@ -53,6 +57,9 @@ model = "kaypro4_84"
 
 # --- TurboROM 3.4 ---
 # model = "turbo_rom"
+
+# --- TurboROM 3.4 + WD Hard Disk ---
+# model = "turbo_rom_hd"
 
 # --- KayPLUS 84 ---
 # model = "kayplus_84"
@@ -128,10 +135,10 @@ izkaypro [OPTIONS]
 OPTIONS:
     -m, --model <MODEL>      Kaypro model preset
                              [models: kaypro_ii, kaypro4_83, kaypro4_84,
-                              turbo_rom, kayplus_84, kaypro10, custom]
+                              turbo_rom, turbo_rom_hd, kayplus_84, kaypro10, custom]
     -a, --drivea <FILE>      Disk image file for drive A
     -b, --driveb <FILE>      Disk image file for drive B
-        --hd <FILE>          Hard disk image file for Kaypro 10
+        --hd <FILE>          Hard disk image file for WD1002 models
         --rom <FILE>         Custom ROM file (implies --model=custom)
         --speed <MHZ>        CPU clock speed in MHz (1-100, default: unlimited)
         --serial <DEVICE>    Connect SIO-1 Port A to a serial device
@@ -151,7 +158,7 @@ TRACE OPTIONS:
     -v, --crtc-trace         Trace SY6545 CRTC VRAM writes
         --sio-trace          Trace SIO-1 Channel A serial port
         --rtc-trace          Trace MM58167A real-time clock register access
-        --hdc-trace          Trace WD1002-05 hard disk controller (Kaypro 10)
+        --hdc-trace          Trace WD1002-05 hard disk controller
         --trace-all          Enable all trace options
 ```
 

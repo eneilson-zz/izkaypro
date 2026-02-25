@@ -113,6 +113,10 @@ pub struct KayproMachine {
 
     pub kayplus_clock_fixup: bool,
 
+    // True only for the Kaypro 10 hardware profile. This controls model-
+    // specific port 0x14 semantics (drive select/motor behavior).
+    is_kaypro10_hardware: bool,
+
     // Kaypro 10: track previous port 0x14 bit 1 for SASI reset edge detection
     port14_last_bit1: bool,
 
@@ -129,6 +133,7 @@ impl KayproMachine {
         video_mode: VideoMode,
         floppy_controller: FloppyController,
         has_hard_disk: bool,
+        is_kaypro10_hardware: bool,
         trace_io: bool,
         trace_system_bits: bool,
         trace_crtc: bool,
@@ -166,6 +171,7 @@ impl KayproMachine {
             trace_io,
             trace_system_bits,
             kayplus_clock_fixup: false,
+            is_kaypro10_hardware,
             port14_last_bit1: false,
             keyboard: Keyboard::new(),
             floppy_controller,
@@ -272,13 +278,14 @@ impl KayproMachine {
         }
 
         // Drive select (port 0x14: bits 1-0)
-        // On Kaypro 10 (HD present): bit 1 is SASI /MR (reset), only bit 0
-        // selects the drive: 0=A, 1=B.
-        // On Kaypro 4/84 (no HD): bits 1-0 together select the drive:
+        // Kaypro 10 hardware uses bit 1 as SASI /MR reset and bit 0 for
+        // floppy A/B select. TurboROM-on-4/84 keeps the original 2-bit
+        // floppy select behavior even when WD is present.
+        // Standard 4/84 bits 1-0 select the drive:
         //   81-292a: A=10, B=01, both=11 (init→A), neither=00 (none)
-        let drive: Option<u8> = if self.hard_disk.is_some() {
+        let drive: Option<u8> = if self.is_kaypro10_hardware {
             // Kaypro 10 encoding: bit 0 only
-            Some(bits & 0x01) // 0=A, 1=B
+            Some(if bits & 0x01 != 0 { 0 } else { 1 }) // 1=A, 0=B
         } else {
             // Standard 4/84 encoding: bits 1-0
             let drive_sel = bits & 0x03;
@@ -307,9 +314,16 @@ impl KayproMachine {
         self.system_bits = sys_bits;
         self.port14_raw = bits; // Save raw value for reads
 
-        // SASI reset edge detection (Kaypro 10): bit 1 high->low triggers reset
+        // SASI reset edge detection.
+        // Kaypro 10 hardware uses an inverted /MR path (high->low on port bit 1).
+        // TurboROM + WD host adapter uses non-inverted reset toggling (low->high).
         let bit1 = bits & 0x02 != 0;
-        if self.port14_last_bit1 && !bit1 {
+        let reset_edge = if self.is_kaypro10_hardware {
+            self.port14_last_bit1 && !bit1
+        } else {
+            !self.port14_last_bit1 && bit1
+        };
+        if reset_edge {
             if let Some(ref mut hd) = self.hard_disk {
                 hd.sasi_reset();
             }
@@ -323,7 +337,7 @@ impl KayproMachine {
 
         // On Kaypro 10 the floppy motor is auto-started by drive selection;
         // the 81-478c ROM never sets bit 4. On other models, bit 4 controls it.
-        let motor_on = if self.hard_disk.is_some() { true } else { bits & 0x10 != 0 };
+        let motor_on = if self.is_kaypro10_hardware { true } else { bits & 0x10 != 0 };
         self.floppy_controller.set_motor(motor_on);
 
         let single_density = bits & 0x20 != 0;
@@ -349,9 +363,16 @@ impl KayproMachine {
     }
 
     fn get_system_bits_k484(&self) -> u8 {
-        // Return the raw value that was written to port 0x14
-        // This preserves bits like CharSet (bit 6) that we don't track internally
-        self.port14_raw
+        // Return the raw value that was written to port 0x14.
+        // For TurboROM+WD add-on hardware, bit 1 is wired to SASI reset
+        // output logic and reads back high through pull-ups; preserve that
+        // behavior so ROM floppy-boot path checks see the expected state.
+        if self.hard_disk.is_some() && !self.is_kaypro10_hardware {
+            self.port14_raw | 0x02
+        } else {
+            // Preserve bits like CharSet (bit 6) that we don't track internally
+            self.port14_raw
+        }
     }
 
     fn sio_b_write_control(&mut self, value: u8) {

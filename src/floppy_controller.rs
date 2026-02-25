@@ -613,6 +613,18 @@ impl FloppyController {
             status |= FDCStatus::NotReady as u8;
         }
 
+        // Head Loaded (bit 5) should also reflect current motor state
+        // dynamically. On real hardware, HLD tracks the head-load
+        // flipflop which is set when the motor is running and a Type I
+        // command has the h flag set, or any Type II/III command runs.
+        // The ROM may check this bit to confirm the drive is operational
+        // before choosing floppy boot over HD boot.
+        if self.motor_on {
+            status |= 0x20; // S5: Head Loaded
+        } else {
+            status &= !0x20;
+        }
+
         if self.status & FDCStatus::Busy as u8 != 0 {
             // Type II/III status: bit 1 = DRQ (data ready for CPU to read/write)
             if self.read_index < self.read_last || !self.data_buffer.is_empty() || self.write_track_active {

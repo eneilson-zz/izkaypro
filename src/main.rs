@@ -34,12 +34,12 @@ use self::keyboard_win::Command;
     about = "Kaypro computer emulator for the terminal",
     long_about = "izkaypro - Kaypro Emulator\n\
         https://github.com/ivanizag/izkaypro\n\n\
-        Emulates Kaypro II, 4/83, 2X/4/84, TurboROM, and KayPLUS computers.\n\
+        Emulates Kaypro II, 4/83, 2X/4/84, TurboROM, TurboROM+HD, and KayPLUS computers.\n\
         Configuration is loaded from izkaypro.toml; command-line arguments override config file settings.",
     version,
 )]
 struct Cli {
-    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, kayplus_84, kaypro10, custom]
+    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, turbo_rom_hd, kayplus_84, kaypro10, custom]
     #[arg(short = 'm', long, value_name = "MODEL")]
     model: Option<String>,
 
@@ -51,7 +51,7 @@ struct Cli {
     #[arg(short = 'b', long, value_name = "FILE")]
     driveb: Option<String>,
 
-    /// Hard disk image file for Kaypro 10 (creates blank image if file doesn't exist)
+    /// Hard disk image file for WD1002 models (creates blank image if file doesn't exist)
     #[arg(long, value_name = "FILE")]
     hd: Option<String>,
 
@@ -103,7 +103,7 @@ struct Cli {
     #[arg(long)]
     rtc_trace: bool,
 
-    /// Trace WD1002-05 hard disk controller (Kaypro 10)
+    /// Trace WD1002-05 hard disk controller
     #[arg(long)]
     hdc_trace: bool,
 
@@ -149,14 +149,16 @@ fn main() {
         config.get_description()
     );
 
-    // Kaypro 10 has no floppies by default (HD boot); only load if user specified
-    let disk_a_path = if config.model == KayproModel::Kaypro10 {
+    // HD-boot models have no floppies by default; only load if user specified
+    let hd_boot = config.model == KayproModel::Kaypro10
+        || config.model == KayproModel::TurboRomHd;
+    let disk_a_path = if hd_boot {
         config.disk_a.clone().unwrap_or_default()
     } else {
         config.disk_a.clone()
             .unwrap_or_else(|| config.get_default_disk_a().to_string())
     };
-    let disk_b_path = if config.model == KayproModel::Kaypro10 {
+    let disk_b_path = if hd_boot {
         config.disk_b.clone().unwrap_or_default()
     } else {
         config.disk_b.clone()
@@ -179,10 +181,13 @@ fn main() {
     let run_boot_test = cli.boot_test;
     // Kaypro 10: controller always present (soldered to motherboard).
     // TurboROM: controller only present when --hd is specified (add-on card).
+    // TurboROM+HD model: controller always present with default image.
     // Without the controller, TurboROM loads the disk-based TURBO-BIOS;
     // with it, TurboROM activates its ROM-resident BIOS which needs a
     // formatted HD parameter sector to operate correctly.
+    let is_kaypro10_hardware = config.model == KayproModel::Kaypro10;
     let has_hard_disk = config.model == KayproModel::Kaypro10
+        || config.model == KayproModel::TurboRomHd
         || (config.model == KayproModel::TurboRom && cli.hd.is_some());
 
     // When --trace-log is used, traces go to a file and don't affect screen rendering.
@@ -214,6 +219,7 @@ fn main() {
         config.get_video_mode(),
         floppy_controller,
         has_hard_disk,
+        is_kaypro10_hardware,
         trace_io,
         trace_system_bits,
         trace_crtc,
@@ -221,22 +227,28 @@ fn main() {
         trace_rtc,
         trace_hdc,
     );
+
+    // TurboROM+HD: only LUN 1 should report READY. The ROM probes LUN 2
+    // as well, but reporting it READY with the same backing image causes
+    // the ROM to see two identical drives (4 partitions instead of 2).
+    // LUN 1 only (the default) is correct for a single-drive setup.
+
     machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
 
     // Kaypro 10 boot priority: the ROM checks FDC NOT READY at power-on.
     // NOT READY → HD boot, READY → floppy boot. Set disk_in_drive=false
     // when HD is present and no user floppy was specified, so the ROM
     // boots from the hard disk.
-    if has_hard_disk && cli.drivea.is_none() {
+    if is_kaypro10_hardware && cli.drivea.is_none() {
         machine.floppy_controller.disk_in_drive = false;
     }
 
-    // Load hard disk image: use --hd path if specified, otherwise use default for Kaypro 10
+    // Load hard disk image: use --hd path if specified, otherwise use model defaults.
     let hd_path = cli.hd.clone().or_else(|| {
-        if config.model == KayproModel::Kaypro10 {
-            Some("disks/system/kaypro10.hd".to_string())
-        } else {
-            None
+        match config.model {
+            KayproModel::Kaypro10 => Some("disks/system/kaypro10.hd".to_string()),
+            KayproModel::TurboRomHd => Some("disks/system/turborom.hd".to_string()),
+            _ => None,
         }
     });
     if let Some(ref hd_path) = hd_path {
@@ -246,7 +258,7 @@ fn main() {
                 Err(e) => eprintln!("Warning: Failed to load hard disk image '{}': {}", hd_path, e),
             }
         } else {
-            eprintln!("Warning: --hd specified but model doesn't support hard disk (use --model kaypro10)");
+            eprintln!("Warning: --hd specified but model doesn't support hard disk (use --model kaypro10|turbo_rom_hd|turbo_rom)");
         }
     }
 
@@ -416,7 +428,7 @@ fn main() {
                         screen.show_status = !screen.show_status;
                     },
                     Command::SelectDiskA => {
-                        let prompt = if has_hard_disk {
+                        let prompt = if is_kaypro10_hardware {
                             "File to load in Drive C (floppy)"
                         } else {
                             "File to load in Drive A"
@@ -432,7 +444,7 @@ fn main() {
                                 // boot when no disk was present (defaulting to SSDD).
                                 // Patch the drive type table at 0xFFF6 to match the
                                 // actual format of the inserted disk image.
-                                if has_hard_disk {
+                                if is_kaypro10_hardware {
                                     let format = machine.floppy_controller.media_a().format;
                                     let type_byte = match format {
                                         media::MediaFormat::DsDd => 0x09,
@@ -445,7 +457,7 @@ fn main() {
                         }
                     }
                     Command::SelectDiskB => {
-                        if has_hard_disk {
+                        if is_kaypro10_hardware {
                             screen.message(&mut machine, "Kaypro 10 has only one floppy drive (C:)");
                         } else if let Some(path) = screen.prompt(&mut machine, "File to load in Drive B") {
                             let res = machine.floppy_controller.media_b_mut().load_disk(path.as_str());
