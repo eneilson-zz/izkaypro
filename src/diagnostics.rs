@@ -723,6 +723,7 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
                             fdc_motor_toggles, pc),
                     };
                 }
+
                 break TestResult {
                     name: format!("Boot {}", cfg.name),
                     passed: true,

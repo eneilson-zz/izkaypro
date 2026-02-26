@@ -122,9 +122,9 @@ pub struct KayproMachine {
 
     // Advent Personality/Decoder Board PIO emulation (ports 0x88-0x8B).
     // Required for TurboROM+HD to detect more than 1 floppy drive.
-    // Port 0x88: data FIFO (OTIR writes, INIR reads back)
+    // Port 0x88: PIO data (writes accepted, reads return 0xFF = no RAM disk)
+    // Port 0x8A: drive select (1-2)
     // Port 0x8B: status switch (bit 2 = 0 means drive present)
-    advent_pio_fifo: Vec<u8>,
     advent_pio_enabled: bool,
 
     pub keyboard: Keyboard,
@@ -180,7 +180,6 @@ impl KayproMachine {
             kayplus_clock_fixup: false,
             is_kaypro10_hardware,
             port14_last_bit1: false,
-            advent_pio_fifo: Vec::new(),
             advent_pio_enabled: has_hard_disk && !is_kaypro10_hardware,
             keyboard: Keyboard::new(),
             floppy_controller,
@@ -549,7 +548,7 @@ impl Machine for KayproMachine {
         // is shared with the WD1002-05 SASI reset.
         if self.advent_pio_enabled && port >= 0x88 && port <= 0x8B {
             match port {
-                0x88 => self.advent_pio_fifo.push(value),
+                0x88 => {} // PIO output latch — accepted, not used
                 0x8A => {
                     if value >= 1 && value <= 2 {
                         let drive = value - 1;
@@ -663,12 +662,11 @@ impl Machine for KayproMachine {
         if self.advent_pio_enabled && port >= 0x88 && port <= 0x8B {
             return match port {
                 0x88 => {
-                    // FIFO read: return and remove first byte (INIR reads in order)
-                    if !self.advent_pio_fifo.is_empty() {
-                        self.advent_pio_fifo.remove(0)
-                    } else {
-                        0x00
-                    }
+                    // PIO data port read: returns input pin state, NOT the
+                    // output latch. Without an Advent RAM disk connected,
+                    // input pins float high (0xFF). Returning written data
+                    // (FIFO) would make TurboROM falsely detect a RAM disk.
+                    0xFF
                 }
                 0x8B => {
                     // Status switch: bit 2 = 0 means drive present.
