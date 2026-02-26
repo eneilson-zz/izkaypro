@@ -98,6 +98,12 @@ pub struct HardDisk {
     // accept commands. Default is LUN1 only (bit 1), matching Kaypro 10.
     ready_lun_mask: u8,
 
+    // When true, SASI reset completes immediately (busy_countdown=1).
+    // TurboROM checks BUSY after a very short delay to decide if port 0x14
+    // bit 1 is shared with SASI reset. On the Advent board, the controller
+    // must appear READY quickly so sltmsk stays at 0x03 (4-drive select).
+    pub quick_reset: bool,
+
     // Data transfer buffer and state
     data_buf: Vec<u8>,
     data_length: usize,
@@ -142,6 +148,7 @@ impl HardDisk {
             busy_countdown: 0,
             intrq: false,
             ready_lun_mask: 1 << 1,
+            quick_reset: false,
             data_buf: vec![0u8; 1024 + 4], // max sector size (1024) + 4 ECC bytes
             data_length: SECTOR_SIZE,
             data_ix: 0,
@@ -328,10 +335,11 @@ impl HardDisk {
         // BUSY set immediately; cleared when diagnostics complete
         self.status = STS_BUSY;
         self.reset_pending = true;
-        // The ROM polls status in a tight loop (~0x6000 iterations with
-        // delay calls). We use a countdown decremented on each status
-        // read so BUSY clears after a realistic number of polls.
-        self.busy_countdown = 20;
+        // The ROM polls status in a tight loop. We use a countdown
+        // decremented on each status read so BUSY clears after enough polls.
+        // Advent board systems need quick_reset so TurboROM sees NOT BUSY
+        // on its first status check and preserves sltmsk=0x03 (4-drive mode).
+        self.busy_countdown = if self.quick_reset { 1 } else { 20 };
     }
 
     // --- Port I/O ---

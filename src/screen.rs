@@ -9,6 +9,7 @@ pub struct Screen {
     pub show_help: bool,
     machine_name: String,
     no_border: bool,
+    pub floppy_drive_labels: (char, char),
 }
 
 #[allow(dead_code)]
@@ -37,6 +38,7 @@ impl Screen {
             show_help: false,
             machine_name: machine_name.to_string(),
             no_border,
+            floppy_drive_labels: ('A', 'B'),
         }
     }
     
@@ -258,10 +260,11 @@ impl Screen {
         if !self.no_border {
             let mut disk_status = "======".to_owned();
             if self.show_status && machine.floppy_controller.motor_on {
+                let (label_a, label_b) = self.floppy_drive_labels;
                 if machine.floppy_controller.drive == 0 {
-                    disk_status = " A".to_owned();
+                    disk_status = format!(" {}", label_a);
                 } else {
-                    disk_status = " B".to_owned();
+                    disk_status = format!(" {}", label_b);
                 }
                 if machine.floppy_controller.single_density {
                     disk_status += " SD ";
@@ -292,13 +295,14 @@ impl Screen {
             println!("+------------------------------------------------------------------+          ");
             println!("| izkaypro: Kaypro emulator             F1: help  F4: quit         |          ");
             println!("|------------------------------------------------------------------|          ");
-            println!("| F2: disk status  F5: drive A  F7: save BIOS  F9: set speed       |          ");
-            println!("| F6: drive B      F8: CPU trace                                   |          ");
+            let (la, lb) = self.floppy_drive_labels;
+            println!("| F2: disk status  F5: drive {}  F7: save BIOS  F9: set speed       |          ", la);
+            println!("| F6: drive {}      F8: CPU trace                                   |          ", lb);
             println!("|------------------------------------------------------------------|          ");
             println!("| Host: Delete=DEL, Insert=LINEFEED                                |          ");
             println!("|------------------------------------------------------------------|          ");
-            println!("| A: {:74}|", machine.floppy_controller.media_a().info());
-            println!("| B: {:74}|", machine.floppy_controller.media_b().info());
+            println!("| {}: {:74}|", la, machine.floppy_controller.media_a().info());
+            println!("| {}: {:74}|", lb, machine.floppy_controller.media_b().info());
             println!("+------------------------------------------------------------------+          ");
             if self.in_place {
                 print!("\x1b[{}B", 20-11);
@@ -313,15 +317,16 @@ impl Screen {
             println!("||        |  F1: Show/hide help           | Host keys to Kaypro keys:      |        ||");
             println!("||        |  F2: Show/hide disk status    |  Delete to DEL                 |        ||");
             println!("||        |  F4: Quit the emulator        |  Insert to LINEFEED            |        ||");
-            println!("||        |  F5: Select file for drive A: |                                |        ||");
-            println!("||        |  F6: Select file for drive B: |                                |        ||");
+            let (la, lb) = self.floppy_drive_labels;
+            println!("||        |  F5: Select file for drive {}: |                                |        ||", la);
+            println!("||        |  F6: Select file for drive {}: |                                |        ||", lb);
             println!("||        |  F7: Save BIOS to file        |                                |        ||");
             println!("||        |  F8: Toggle CPU trace         |                                |        ||");
             println!("||        |  F9: Set CPU speed (MHz)      |                                |        ||");
             println!("||        +----------------------------------------------------------------+        ||");
             println!("||        |  Loaded images:                                                |        ||");
-            println!("||        |  A: {:58} |        ||", machine.floppy_controller.media_a().info());
-            println!("||        |  B: {:58} |        ||", machine.floppy_controller.media_b().info());
+            println!("||        |  {}: {:58} |        ||", la, machine.floppy_controller.media_a().info());
+            println!("||        |  {}: {:58} |        ||", lb, machine.floppy_controller.media_b().info());
             println!("||        +----------------------------------------------------------------+        ||");
 
             if self.in_place {

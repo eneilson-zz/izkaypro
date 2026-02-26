@@ -184,7 +184,15 @@ impl KayproMachine {
             advent_pio_enabled: has_hard_disk && !is_kaypro10_hardware,
             keyboard: Keyboard::new(),
             floppy_controller,
-            hard_disk: if has_hard_disk { Some(HardDisk::new(trace_hdc)) } else { None },
+            hard_disk: if has_hard_disk {
+                let mut hd = HardDisk::new(trace_hdc);
+                // Advent board systems need quick SASI reset so TurboROM
+                // preserves sltmsk=0x03 for 4-drive floppy detection.
+                if !is_kaypro10_hardware {
+                    hd.quick_reset = true;
+                }
+                Some(hd)
+            } else { None },
             sio: Sio::new(trace_sio),
             rtc: Rtc::new(trace_rtc),
         }

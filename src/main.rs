@@ -235,6 +235,12 @@ fn main() {
 
     machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
 
+    // Advent board HD systems map floppies to C/D instead of A/B
+    let advent_board = has_hard_disk && !is_kaypro10_hardware;
+    if advent_board {
+        screen.floppy_drive_labels = ('C', 'D');
+    }
+
     // Kaypro 10 boot priority: the ROM checks FDC NOT READY at power-on.
     // NOT READY → HD boot, READY → floppy boot. Set disk_in_drive=false
     // when HD is present and no user floppy was specified, so the ROM
@@ -428,12 +434,9 @@ fn main() {
                         screen.show_status = !screen.show_status;
                     },
                     Command::SelectDiskA => {
-                        let prompt = if is_kaypro10_hardware {
-                            "File to load in Drive C (floppy)"
-                        } else {
-                            "File to load in Drive A"
-                        };
-                        if let Some(path) = screen.prompt(&mut machine, prompt) {
+                        let (la, _) = screen.floppy_drive_labels;
+                        let prompt = format!("File to load in Drive {}", la);
+                        if let Some(path) = screen.prompt(&mut machine, &prompt) {
                             let res = machine.floppy_controller.media_a_mut().load_disk(path.as_str());
                             if let Err(err) = res {
                                 screen.message(&mut machine, &err.to_string())
@@ -459,10 +462,14 @@ fn main() {
                     Command::SelectDiskB => {
                         if is_kaypro10_hardware {
                             screen.message(&mut machine, "Kaypro 10 has only one floppy drive (C:)");
-                        } else if let Some(path) = screen.prompt(&mut machine, "File to load in Drive B") {
-                            let res = machine.floppy_controller.media_b_mut().load_disk(path.as_str());
-                            if let Err(err) = res {
-                                screen.message(&mut machine, &err.to_string())
+                        } else {
+                            let (_, lb) = screen.floppy_drive_labels;
+                            let prompt = format!("File to load in Drive {}", lb);
+                            if let Some(path) = screen.prompt(&mut machine, &prompt) {
+                                let res = machine.floppy_controller.media_b_mut().load_disk(path.as_str());
+                                if let Err(err) = res {
+                                    screen.message(&mut machine, &err.to_string())
+                                }
                             }
                         }
                     }
