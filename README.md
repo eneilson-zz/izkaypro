@@ -3,15 +3,14 @@
 [![Latest Release](https://img.shields.io/github/v/tag/eneilson-zz/izkaypro?label=release&sort=semver)](https://github.com/eneilson-zz/izkaypro/releases)
 
 ## What is this?
-
 This is a Kaypro emulator that runs in a terminal window on Linux, OSX, FreeBSD, and Windows.  It supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM and KayPLUS ROM variants.  The emulator also supports SSDD and DSDD disk images where ROM-appropriaate.  For best display results, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
 
+This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
+
+
 ## Update 2/2026
-TurboROM with hard disk support is now working. Use `--model=turbo_rom_hd` to boot from a TurboROM hard disk image. The HD image must be formatted with HDFMT and have system tracks installed. Drives A and B are 5MB hard disk partitions; floppy drives are accessible via TurboMap (use F5 to insert a floppy at runtime).
-
-This is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
-
-Uses the [iz80](https://github.com/ivanizag/iz80) library. Made with Rust.
+**The penultimate Kaypro is here!**
+A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Use `--model=turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
 
 ## What is/was a Kaypro computer?
 
@@ -163,7 +162,7 @@ TRACE OPTIONS:
 ```
 
 ## Resources
-
+- [Uses the iz80 library](https://github.com/ivanizag/iz80). Made with Rust.
 - [ROM disassembled and commented](https://github.com/ivanizag/kaypro-disassembly)
 - [Kaypro manuals in bitsavers](http://bitsavers.informatik.uni-stuttgart.de/pdf/kaypro/)
 - [Disks from retroarchive](http://www.retroarchive.org/maslin/disks/kaypro/)
