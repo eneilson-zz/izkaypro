@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 /// MM58167A Real Time Clock emulation for Kaypro 4-84.
 ///
@@ -15,6 +15,7 @@ pub struct Rtc {
     reg_select: u8,
     ram: [u8; 8],           // Alarm/RAM latch registers (0x08-0x0F)
     time_offset_secs: i64,  // Offset from host time (set by user writes)
+    last_status_read: Instant, // For Status Bit register (0x14) rollover detection
     pub trace: bool,
 }
 
@@ -24,6 +25,7 @@ impl Rtc {
             reg_select: 0,
             ram: [0; 8],
             time_offset_secs: 0,
+            last_status_read: Instant::now(),
             trace,
         }
     }
@@ -90,20 +92,43 @@ impl Rtc {
     }
 
     /// Read from port 0x24 (CLKDAT) — read the selected register.
-    pub fn read_data(&self) -> u8 {
+    pub fn read_data(&mut self) -> u8 {
         let reg = self.reg_select;
         let value = match reg {
             0x00..=0x07 => self.read_counter(reg),
             0x08..=0x0F => self.ram[(reg - 0x08) as usize],
             0x10 => 0,    // Interrupt Status (no interrupts in Phase 1)
             0x11 => 0,    // Interrupt Control
-            0x14 => 0,    // Status Bit — no rollover
+            0x14 => self.read_status_bit(),
             _ => 0,
         };
         if self.trace {
             println!("RTC: Read reg 0x{:02X} = 0x{:02X}", reg, value);
         }
         value
+    }
+
+    /// MM58167A Status Bit register (0x14): reports which counters have
+    /// updated (rolled over) since the last read. Reading clears all bits.
+    /// Clock drivers poll this to confirm the RTC is ticking.
+    ///
+    /// Bit 0: milliseconds (1ms)    Bit 4: hours
+    /// Bit 1: 10ms/100ms            Bit 5: day of week
+    /// Bit 2: seconds               Bit 6: day of month
+    /// Bit 3: minutes               Bit 7: month
+    fn read_status_bit(&mut self) -> u8 {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_status_read);
+        self.last_status_read = now;
+
+        let ms = elapsed.as_millis();
+        let mut status: u8 = 0;
+        if ms >= 1       { status |= 0x01; } // milliseconds counter updated
+        if ms >= 10      { status |= 0x02; } // tenths/hundredths updated
+        if ms >= 1_000   { status |= 0x04; } // seconds updated
+        if ms >= 60_000  { status |= 0x08; } // minutes updated
+        // hours/dow/day/month rollovers are extremely rare during polling
+        status
     }
 
     /// Read a counter register by computing current time from host clock + offset.
