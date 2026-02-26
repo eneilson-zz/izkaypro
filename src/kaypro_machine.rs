@@ -120,6 +120,13 @@ pub struct KayproMachine {
     // Kaypro 10: track previous port 0x14 bit 1 for SASI reset edge detection
     port14_last_bit1: bool,
 
+    // Advent Personality/Decoder Board PIO emulation (ports 0x88-0x8B).
+    // Required for TurboROM+HD to detect more than 1 floppy drive.
+    // Port 0x88: data FIFO (OTIR writes, INIR reads back)
+    // Port 0x8B: status switch (bit 2 = 0 means drive present)
+    advent_pio_fifo: Vec<u8>,
+    advent_pio_enabled: bool,
+
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
     pub hard_disk: Option<HardDisk>,
@@ -173,6 +180,8 @@ impl KayproMachine {
             kayplus_clock_fixup: false,
             is_kaypro10_hardware,
             port14_last_bit1: false,
+            advent_pio_fifo: Vec::new(),
+            advent_pio_enabled: has_hard_disk && !is_kaypro10_hardware,
             keyboard: Keyboard::new(),
             floppy_controller,
             hard_disk: if has_hard_disk { Some(HardDisk::new(trace_hdc)) } else { None },
@@ -364,15 +373,12 @@ impl KayproMachine {
 
     fn get_system_bits_k484(&self) -> u8 {
         // Return the raw value that was written to port 0x14.
-        // For TurboROM+WD add-on hardware, bit 1 is wired to SASI reset
-        // output logic and reads back high through pull-ups; preserve that
-        // behavior so ROM floppy-boot path checks see the expected state.
-        if self.hard_disk.is_some() && !self.is_kaypro10_hardware {
-            self.port14_raw | 0x02
-        } else {
-            // Preserve bits like CharSet (bit 6) that we don't track internally
-            self.port14_raw
-        }
+        // On 4/84 hardware, bit 1 is a floppy drive select and reads back
+        // the written value. Do NOT force it high — TurboROM reads port 0x14
+        // back to distinguish Kaypro 10 (bit 1 = SASI /MR pull-up, stuck high)
+        // from 4/84 (bit 1 = drive B select, reflects written value). Forcing
+        // it high makes the ROM think it's K10 and limits floppy detection to 1.
+        self.port14_raw
     }
 
     fn sio_b_write_control(&mut self, value: u8) {
@@ -528,6 +534,25 @@ impl Machine for KayproMachine {
             }
             // Fall through to generic >= 0x80 handler when no HD controller
         }
+        // Advent Personality/Decoder Board PIO (ports 0x88-0x8B).
+        // TurboROM uses these during floppy drive detection at cold boot.
+        // The board provides additional drive select lines beyond the 2
+        // native lines on port 0x14, which is needed when port 0x14 bit 1
+        // is shared with the WD1002-05 SASI reset.
+        if self.advent_pio_enabled && port >= 0x88 && port <= 0x8B {
+            match port {
+                0x88 => self.advent_pio_fifo.push(value),
+                0x8A => {
+                    if value >= 1 && value <= 2 {
+                        let drive = value - 1;
+                        self.floppy_controller.set_drive(drive);
+                        self.floppy_controller.set_motor(true);
+                    }
+                }
+                _ => {} // 0x89, 0x8B: accept and ignore
+            }
+            return;
+        }
         if port >= 0x80 {
             // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {
@@ -625,6 +650,30 @@ impl Machine for KayproMachine {
             // Fall through to generic >= 0x80 handler (returns 0x00)
             // when no HD controller — returning 0xFF would set READY in
             // the status byte, causing TurboROM to falsely detect an HD.
+        }
+        // Advent Personality/Decoder Board PIO reads
+        if self.advent_pio_enabled && port >= 0x88 && port <= 0x8B {
+            return match port {
+                0x88 => {
+                    // FIFO read: return and remove first byte (INIR reads in order)
+                    if !self.advent_pio_fifo.is_empty() {
+                        self.advent_pio_fifo.remove(0)
+                    } else {
+                        0x00
+                    }
+                }
+                0x8B => {
+                    // Status switch: bit 2 = 0 means drive present.
+                    // Return 0x00 (all drives present) — the ROM's probe
+                    // loop increments sltmsk until the switch says "no drive".
+                    // With 2 floppy drives, sltmsk reaches 2 then the 3rd
+                    // probe reads bit 2 = 1 (not present) and stops.
+                    // For simplicity, always return 0 (present). The probe
+                    // loop has its own max-drive limit (sltmsk == 4).
+                    0x00
+                }
+                _ => 0x00, // 0x89, 0x8A
+            };
         }
         if port >= 0x80 { // Pin 7 is tied to enable of the 3-8 decoder
             if self.trace_io {

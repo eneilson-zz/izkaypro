@@ -554,6 +554,18 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             hd_image: None,
         },
         BootTestConfig {
+            name: "TurboROM+HD",
+            rom_path: "roms/trom34.rom",
+            video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
+            disk_format: crate::media::MediaFormat::DsDd,
+            disk_a: "",
+            disk_b: "",
+            side1_sector_base: 10,
+            has_hard_disk: true,
+            is_kaypro10_hardware: false,
+            hd_image: Some("disks/system/turborom.hd"),
+        },
+        BootTestConfig {
             name: "Kaypro 10 (81-478c)",
             rom_path: "roms/81-478c.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
