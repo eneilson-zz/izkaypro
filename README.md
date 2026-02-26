@@ -9,8 +9,14 @@ This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's wo
 
 
 ## Update 2/2026
-**The penultimate Kaypro is here!**
-A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Use `--model=turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
+**The Ulimate Kaypro**
+A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model=turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
+
+## But wait, there's more!
+**Add NZ-COM and ZSDOS to your ultimate Kaypro**
+Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/timestamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model=turbo_rom_hd --hd ./disks/system/turborom_nz.hd`.  Once booted, type `nzcom`.  You will the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
+
+**Welcome to peak 80's CP/M computing!**
 
 ## What is/was a Kaypro computer?
 
