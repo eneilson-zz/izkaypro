@@ -3,6 +3,17 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+macro_rules! sio_log {
+    ($file:expr, $($arg:tt)*) => {{
+        let msg = format!($($arg)*);
+        if let Some(ref mut f) = $file {
+            let _ = writeln!(f, "{}", msg);
+        } else {
+            eprintln!("{}", msg);
+        }
+    }};
+}
+
 /// Z84C40 SIO Channel A emulation for Kaypro 4-84 serial port.
 ///
 /// I/O Ports (Kaypro 4-84):
@@ -43,6 +54,7 @@ pub struct Sio {
     baud_rate: u32,
 
     pub trace: bool,
+    pub trace_file: Option<std::fs::File>,
 }
 
 impl Sio {
@@ -60,6 +72,7 @@ impl Sio {
             baud_rate_code: 0x0E, // Default 9600
             baud_rate: 9600,
             trace,
+            trace_file: None,
         }
     }
 
@@ -120,7 +133,7 @@ impl Sio {
                             for &byte in &buf[..n] {
                                 fifo.push_back(byte);
                                 if trace {
-                                    println!("SIO A: Serial Rx 0x{:02X} '{}'", byte,
+                                    eprintln!("SIO A: Serial Rx 0x{:02X} '{}'", byte,
                                         if byte >= 0x20 && byte < 0x7F { byte as char } else { '.' });
                                 }
                             }
@@ -135,7 +148,7 @@ impl Sio {
         self.tx_file = Some(file);
 
         if self.trace {
-            println!("SIO A: Opened serial device '{}'", device_path);
+            sio_log!(self.trace_file, "SIO A: Opened serial device '{}'", device_path);
         }
         Ok(())
     }
@@ -159,7 +172,7 @@ impl Sio {
                     0 => {} // Null command
                     2 => {  // Reset Ext/Status Interrupts
                         if self.trace {
-                            println!("SIO A: Reset Ext/Status Interrupts");
+                            sio_log!(self.trace_file, "SIO A: Reset Ext/Status Interrupts");
                         }
                     }
                     3 => {  // Channel Reset
@@ -167,29 +180,29 @@ impl Sio {
                     }
                     4 => {  // Enable INT on Next Rx Character
                         if self.trace {
-                            println!("SIO A: Enable INT on Next Rx");
+                            sio_log!(self.trace_file, "SIO A: Enable INT on Next Rx");
                         }
                     }
                     5 => {  // Reset Tx INT Pending
                         if self.trace {
-                            println!("SIO A: Reset Tx INT Pending");
+                            sio_log!(self.trace_file, "SIO A: Reset Tx INT Pending");
                         }
                     }
                     6 => {  // Error Reset
                         self.rx_overrun = false;
                         if self.trace {
-                            println!("SIO A: Error Reset");
+                            sio_log!(self.trace_file, "SIO A: Error Reset");
                         }
                     }
                     7 => {  // Return from INT (Channel A only)
                         if self.trace {
-                            println!("SIO A: Return from INT");
+                            sio_log!(self.trace_file, "SIO A: Return from INT");
                         }
                     }
                     _ => {}
                 }
                 if self.trace && cmd != 0 {
-                    println!("SIO A: WR0 cmd={} ptr={}", cmd, self.reg_pointer);
+                    sio_log!(self.trace_file, "SIO A: WR0 cmd={} ptr={}", cmd, self.reg_pointer);
                 }
             }
             1 => {
@@ -197,7 +210,7 @@ impl Sio {
                 self.reg_pointer = 0;
                 if self.trace {
                     let rx_mode = (value >> 3) & 0x03;
-                    println!("SIO A: WR1=0x{:02X} (ExtInt={}, TxInt={}, RxMode={})",
+                    sio_log!(self.trace_file, "SIO A: WR1=0x{:02X} (ExtInt={}, TxInt={}, RxMode={})",
                         value, value & 0x01, (value >> 1) & 0x01, rx_mode);
                 }
             }
@@ -206,7 +219,7 @@ impl Sio {
                 // but accept writes silently for compatibility)
                 self.reg_pointer = 0;
                 if self.trace {
-                    println!("SIO A: WR2=0x{:02X} (ignored, Ch B only)", value);
+                    sio_log!(self.trace_file, "SIO A: WR2=0x{:02X} (ignored, Ch B only)", value);
                 }
             }
             3 => {
@@ -216,7 +229,7 @@ impl Sio {
                     let rx_bits = match (value >> 6) & 0x03 {
                         0 => 5, 1 => 7, 2 => 6, _ => 8,
                     };
-                    println!("SIO A: WR3=0x{:02X} (RxEn={}, AutoEn={}, RxBits={})",
+                    sio_log!(self.trace_file, "SIO A: WR3=0x{:02X} (RxEn={}, AutoEn={}, RxBits={})",
                         value, value & 0x01, (value >> 5) & 0x01, rx_bits);
                 }
             }
@@ -235,7 +248,7 @@ impl Sio {
                     } else {
                         "none"
                     };
-                    println!("SIO A: WR4=0x{:02X} (clock={}, stop={}, parity={})",
+                    sio_log!(self.trace_file, "SIO A: WR4=0x{:02X} (clock={}, stop={}, parity={})",
                         value, clock_mode, stop_bits, parity);
                 }
             }
@@ -260,7 +273,7 @@ impl Sio {
                     let tx_bits = match (value >> 5) & 0x03 {
                         0 => 5, 1 => 7, 2 => 6, _ => 8,
                     };
-                    println!("SIO A: WR5=0x{:02X} (TxEn={}, RTS={}, DTR={}, Break={}, TxBits={})",
+                    sio_log!(self.trace_file, "SIO A: WR5=0x{:02X} (TxEn={}, RTS={}, DTR={}, Break={}, TxBits={})",
                         value,
                         (value >> 3) & 0x01,
                         (value >> 1) & 0x01,
@@ -283,11 +296,17 @@ impl Sio {
         self.reg_pointer = 0;
 
         match reg {
-            0 => self.read_rr0(),
+            0 => {
+                let rr0 = self.read_rr0();
+                if self.trace {
+                    sio_log!(self.trace_file, "SIO A: RR0=0x{:02X}", rr0);
+                }
+                rr0
+            },
             1 => self.read_rr1(),
             _ => {
                 if self.trace {
-                    println!("SIO A: Read RR{} (unimplemented, returning 0)", reg);
+                    sio_log!(self.trace_file, "SIO A: Read RR{} (unimplemented, returning 0)", reg);
                 }
                 0
             }
@@ -297,7 +316,7 @@ impl Sio {
     /// Write to the data port (port 0x04). Transmit a byte.
     pub fn write_data(&mut self, value: u8) {
         if self.trace {
-            println!("SIO A: Tx 0x{:02X} '{}'", value,
+            sio_log!(self.trace_file, "SIO A: Tx 0x{:02X} '{}'", value,
                 if value >= 0x20 && value < 0x7F { value as char } else { '.' });
         }
 
@@ -320,7 +339,7 @@ impl Sio {
             if fifo.len() > RX_FIFO_CAPACITY {
                 self.rx_overrun = true;
                 if self.trace {
-                    println!("SIO A: Rx overrun (FIFO len={})", fifo.len());
+                    sio_log!(self.trace_file, "SIO A: Rx overrun (FIFO len={})", fifo.len());
                 }
             }
             fifo.pop_front().unwrap_or(0)
@@ -328,7 +347,7 @@ impl Sio {
             0
         };
         if self.trace && value != 0 {
-            println!("SIO A: Rx 0x{:02X} '{}'", value,
+            sio_log!(self.trace_file, "SIO A: Rx 0x{:02X} '{}'", value,
                 if value >= 0x20 && value < 0x7F { value as char } else { '.' });
         }
         value
@@ -341,12 +360,26 @@ impl Sio {
         self.baud_rate_code = code;
         self.baud_rate = Self::decode_baud_rate(code);
         if self.trace {
-            println!("SIO A: Baud rate code 0x{:02X} = {} baud", code, self.baud_rate);
+            sio_log!(self.trace_file, "SIO A: Baud rate code 0x{:02X} = {} baud", code, self.baud_rate);
         }
     }
 
     pub fn is_connected(&self) -> bool {
         self.tx_file.is_some()
+    }
+
+    /// Check if the Rx FIFO has data available (for interrupt generation).
+    pub fn has_rx_data(&self) -> bool {
+        if let Ok(fifo) = self.rx_fifo.lock() {
+            !fifo.is_empty()
+        } else {
+            false
+        }
+    }
+
+    /// Check if Rx interrupts are enabled (WR1 bits 4-3 != 0).
+    pub fn rx_int_enabled(&self) -> bool {
+        (self.wr[1] >> 3) & 0x03 != 0
     }
 
     /// Get a short status string for the F2 display.
@@ -367,7 +400,7 @@ impl Sio {
         }
         self.tx_ready_at = Instant::now();
         if self.trace {
-            println!("SIO A: Channel Reset");
+            sio_log!(self.trace_file, "SIO A: Channel Reset");
         }
     }
 
@@ -378,11 +411,11 @@ impl Sio {
             if send_break {
                 unsafe { libc::tcsendbreak(fd, 0); }
                 if self.trace {
-                    println!("SIO A: Send Break asserted");
+                    sio_log!(self.trace_file, "SIO A: Send Break asserted");
                 }
             } else {
                 if self.trace {
-                    println!("SIO A: Send Break cleared");
+                    sio_log!(self.trace_file, "SIO A: Send Break cleared");
                 }
             }
         }
@@ -393,7 +426,7 @@ impl Sio {
 
     /// Update RTS and DTR modem control lines from WR5 state.
     #[cfg(unix)]
-    fn update_modem_signals(&self) {
+    fn update_modem_signals(&mut self) {
         if let Some(fd) = self.serial_fd {
             let rts = (self.wr[5] >> 1) & 0x01 != 0;
             let dtr = (self.wr[5] >> 7) & 0x01 != 0;
@@ -405,13 +438,13 @@ impl Sio {
             unsafe { libc::ioctl(fd, libc::TIOCMSET, &bits); }
 
             if self.trace {
-                println!("SIO A: Modem signals RTS={} DTR={}", rts as u8, dtr as u8);
+                sio_log!(self.trace_file, "SIO A: Modem signals RTS={} DTR={}", rts as u8, dtr as u8);
             }
         }
     }
 
     #[cfg(windows)]
-    fn update_modem_signals(&self) {}
+    fn update_modem_signals(&mut self) {}
 
     /// Read modem status lines (CTS, DCD) from the serial device.
     #[allow(dead_code)]
@@ -455,17 +488,26 @@ impl Sio {
         }
 
         // D2: Tx Buffer Empty (ready to accept data)
+        // D6: Tx Underrun/EOM (transmitter completely idle)
         if Instant::now() >= self.tx_ready_at {
-            status |= 0x04;
+            status |= 0x04; // Tx Buffer Empty
+            status |= 0x40; // Tx Underrun/EOM
         }
 
-        // D3: DCD, D5: CTS — default to asserted when connected.
-        // Real modem signal reading (read_modem_signals) is available but
-        // not called per-poll due to ioctl syscall overhead. Ptys don't
-        // have modem lines anyway; real serial hardware can enable this.
+        // D3: DCD — tracks DTR state (null-modem loopback).
+        // On a null-modem cable, local DTR drives remote DCD. Since ptys
+        // don't have real modem signals, we simulate this by looping DTR
+        // back to DCD locally. This gives programs like Mite the DCD
+        // transition they need when they assert DTR during initialization.
+        // D5: CTS — always asserted when connected. The BIOS sets
+        // AutoEnable (WR3 bit 5) which gates the transmitter on CTS.
+        // Since the BIOS leaves RTS=0, tying CTS to RTS would break Tx.
         if self.is_connected() {
-            status |= 0x08; // DCD
-            status |= 0x20; // CTS
+            let dtr = (self.wr[5] >> 7) & 0x01 != 0;
+            if dtr {
+                status |= 0x08; // DCD (follows DTR)
+            }
+            status |= 0x20; // CTS (always asserted)
         }
 
         status

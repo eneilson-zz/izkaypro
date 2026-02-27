@@ -106,7 +106,8 @@ pub struct KayproMachine {
     sio_b_wr_select: u8,   // Next WR register to write (set by WR0 pointer bits)
     pub sio_b_wr1: u8,     // WR1: interrupt enable/mode
     pub sio_b_wr2: u8,     // WR2: interrupt vector (channel B only)
-    pub sio_int_pending: bool, // SIO interrupt waiting to be serviced
+    pub sio_int_pending: bool, // SIO-B interrupt waiting to be serviced
+    pub sio_a_int_pending: bool, // SIO-A interrupt waiting to be serviced
 
     pub trace_io: bool,
     trace_system_bits: bool,
@@ -126,6 +127,13 @@ pub struct KayproMachine {
     // Port 0x8A: drive select (1-2)
     // Port 0x8B: status switch (bit 2 = 0 means drive present)
     advent_pio_enabled: bool,
+
+    // SIO Channel A port 0x04 read guard: tracks whether a user program
+    // reads the serial data register directly (RAM rank). Programs like
+    // QTerm do direct I/O and need the BIOS blocked from stealing Rx
+    // bytes. Programs like Mite delegate data reads to the BIOS (ROM
+    // rank) and need the guard disabled.
+    sio_user_direct_rx: bool,
 
     pub keyboard: Keyboard,
     pub floppy_controller: FloppyController,
@@ -175,12 +183,14 @@ impl KayproMachine {
             sio_b_wr1: 0,
             sio_b_wr2: 0,
             sio_int_pending: false,
+            sio_a_int_pending: false,
             trace_io,
             trace_system_bits,
             kayplus_clock_fixup: false,
             is_kaypro10_hardware,
             port14_last_bit1: false,
             advent_pio_enabled: has_hard_disk && !is_kaypro10_hardware,
+            sio_user_direct_rx: false,
             keyboard: Keyboard::new(),
             floppy_controller,
             hard_disk: if has_hard_disk {
@@ -432,36 +442,36 @@ impl KayproMachine {
         }
     }
 
-    /// Check if the SIO should generate an interrupt for keyboard input.
+    /// Check if the SIO should generate an interrupt for serial or keyboard input.
     /// Returns the IM2 vector address if an interrupt should fire, or None.
+    /// Channel A (serial) has higher priority than Channel B (keyboard).
     pub fn sio_check_interrupt(&mut self, i_reg: u8) -> Option<u16> {
-        // Only fire if Rx interrupts are enabled (WR1 bits 4-3 != 00)
+        // Channel A: serial Rx interrupt
+        if self.sio.rx_int_enabled() && !self.sio_a_int_pending && self.sio.has_rx_data() {
+            self.sio_a_int_pending = true;
+            // Channel A Rx Available: vector bits 3,2,1 = 110
+            let vector_byte = (self.sio_b_wr2 & 0xF1) | 0x0C;
+            return self.read_im2_vector(i_reg, vector_byte);
+        }
+
+        // Channel B: keyboard Rx interrupt
         let rx_int_mode = (self.sio_b_wr1 >> 3) & 0x03;
-        if rx_int_mode == 0 {
-            return None;
+        if rx_int_mode != 0 && !self.sio_int_pending && self.keyboard.is_key_pressed() {
+            self.sio_int_pending = true;
+            // Channel B Rx Available: vector bits 3,2,1 = 010
+            let vector_byte = (self.sio_b_wr2 & 0xF1) | 0x04;
+            return self.read_im2_vector(i_reg, vector_byte);
         }
 
-        if self.sio_int_pending {
-            return None;
-        }
+        None
+    }
 
-        if !self.keyboard.is_key_pressed() {
-            return None;
-        }
-
-        self.sio_int_pending = true;
-
-        // IM2 vector: I register << 8 | modified WR2
-        // Channel B Rx Available: vector bits 3,2,1 = 010
-        let vector_byte = (self.sio_b_wr2 & 0xF1) | 0x04;
+    /// Read a handler address from the IM2 vector table.
+    fn read_im2_vector(&self, i_reg: u8, vector_byte: u8) -> Option<u16> {
         let vector_addr = (i_reg as u16) << 8 | vector_byte as u16;
-
-        // Read the handler address from the vector table
         let handler_lo = self.ram[vector_addr as usize] as u16;
         let handler_hi = self.ram[vector_addr.wrapping_add(1) as usize] as u16;
-        let handler = handler_hi << 8 | handler_lo;
-
-        Some(handler)
+        Some(handler_hi << 8 | handler_lo)
     }
 
     /// Patch the KayPLUS software clock counters (0xFF5C-0xFF5E) with
@@ -689,11 +699,21 @@ impl Machine for KayproMachine {
         }
 
         let value = match port {
-            // SIO-1 Channel A data — only drain Rx FIFO from user programs.
-            // TurboROM's BIOS continuously reads port 0x04, which would
-            // steal bytes from QTerm's Rx stream.
+            // SIO-1 Channel A data register.
+            // Guard: TurboROM's BIOS reads port 0x04 in its idle loop,
+            // which would steal bytes from programs doing direct I/O
+            // (e.g. QTerm). Block ROM-rank reads only when a user program
+            // has shown it reads port 0x04 directly (RAM rank). Programs
+            // like Mite delegate data reads to the BIOS and need them
+            // to pass through.
             0x04 => {
-                if self.is_rom_rank() { 0 } else { self.sio.read_data() }
+                self.sio_a_int_pending = false;
+                if self.is_rom_rank() {
+                    if self.sio_user_direct_rx { 0 } else { self.sio.read_data() }
+                } else {
+                    self.sio_user_direct_rx = true;
+                    self.sio.read_data()
+                }
             },
             0x06 => self.sio.read_control(),
 
