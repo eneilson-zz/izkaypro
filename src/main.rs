@@ -39,7 +39,7 @@ use self::keyboard_win::Command;
     version,
 )]
 struct Cli {
-    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, turbo_rom_hd, kayplus_84, kaypro10, custom]
+    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, turbo_rom_hd, ultimate, kayplus_84, kaypro10, custom]
     #[arg(short = 'm', long, value_name = "MODEL")]
     model: Option<String>,
 
@@ -151,7 +151,8 @@ fn main() {
 
     // HD-boot models have no floppies by default; only load if user specified
     let hd_boot = config.model == KayproModel::Kaypro10
-        || config.model == KayproModel::TurboRomHd;
+        || config.model == KayproModel::TurboRomHd
+        || config.model == KayproModel::Ultimate;
     let disk_a_path = if hd_boot {
         config.disk_a.clone().unwrap_or_default()
     } else {
@@ -188,6 +189,7 @@ fn main() {
     let is_kaypro10_hardware = config.model == KayproModel::Kaypro10;
     let has_hard_disk = config.model == KayproModel::Kaypro10
         || config.model == KayproModel::TurboRomHd
+        || config.model == KayproModel::Ultimate
         || (config.model == KayproModel::TurboRom && cli.hd.is_some());
 
     // When --trace-log is used, traces go to a file and don't affect screen rendering.
@@ -254,6 +256,7 @@ fn main() {
         match config.model {
             KayproModel::Kaypro10 => Some("disks/system/kaypro10.hd".to_string()),
             KayproModel::TurboRomHd => Some("disks/system/turborom.hd".to_string()),
+            KayproModel::Ultimate => Some("disks/system/turborom_nz.hd".to_string()),
             _ => None,
         }
     });
