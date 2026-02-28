@@ -311,7 +311,7 @@ impl KayproMachine {
         //   81-292a: A=10, B=01, both=11 (init→A), neither=00 (none)
         let drive: Option<u8> = if self.is_kaypro10_hardware {
             // Kaypro 10 encoding: bit 0 only
-            Some(if bits & 0x01 != 0 { 0 } else { 1 }) // 1=A, 0=B
+            Some(bits & 0x01) // 0=A, 1=B
         } else {
             // Standard 4/84 encoding: bits 1-0
             let drive_sel = bits & 0x03;
