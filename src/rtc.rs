@@ -119,7 +119,6 @@ impl Rtc {
     fn read_status_bit(&mut self) -> u8 {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_status_read);
-        self.last_status_read = now;
 
         let ms = elapsed.as_millis();
         let mut status: u8 = 0;
@@ -128,6 +127,14 @@ impl Rtc {
         if ms >= 1_000   { status |= 0x04; } // seconds updated
         if ms >= 60_000  { status |= 0x08; } // minutes updated
         // hours/dow/day/month rollovers are extremely rare during polling
+
+        // Only reset the timer when we report at least one update.
+        // At unlimited CPU speed, the polling loop reads this register
+        // faster than 1ms apart; resetting on every read would prevent
+        // time from accumulating and the driver would never see a tick.
+        if status != 0 {
+            self.last_status_read = now;
+        }
         status
     }
 
