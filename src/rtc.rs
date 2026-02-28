@@ -1,4 +1,16 @@
+use std::io::Write;
 use std::time::{Instant, SystemTime};
+
+/// Route RTC trace output to trace_file when available, otherwise println!.
+macro_rules! rtc_log {
+    ($self:expr, $($arg:tt)*) => {
+        if let Some(ref mut f) = $self.trace_file {
+            let _ = writeln!(f, $($arg)*);
+        } else {
+            println!($($arg)*);
+        }
+    };
+}
 
 /// MM58167A Real Time Clock emulation for Kaypro 4-84.
 ///
@@ -16,7 +28,9 @@ pub struct Rtc {
     ram: [u8; 8],           // Alarm/RAM latch registers (0x08-0x0F)
     time_offset_secs: i64,  // Offset from host time (set by user writes)
     last_status_read: Instant, // For Status Bit register (0x14) rollover detection
+    last_ms_value: u8,        // Last value returned for reg 0x00 (clock-tick detection)
     pub trace: bool,
+    pub trace_file: Option<std::fs::File>,
 }
 
 impl Rtc {
@@ -26,7 +40,9 @@ impl Rtc {
             ram: [0; 8],
             time_offset_secs: 0,
             last_status_read: Instant::now(),
+            last_ms_value: 0xFF,
             trace,
+            trace_file: None,
         }
     }
 
@@ -34,17 +50,17 @@ impl Rtc {
     pub fn write_addr(&mut self, value: u8) {
         self.reg_select = value & 0x1F;
         if self.trace {
-            println!("RTC: Select register 0x{:02X}", self.reg_select);
+            rtc_log!(self, "RTC: Select register 0x{:02X}", self.reg_select);
         }
     }
 
     /// Read from port 0x20 (CLKADD) — echo back selected register.
     /// kayclk.com uses this for RTC detection: writes a register number,
     /// reads it back, and checks if the low nibble matches.
-    pub fn read_addr(&self) -> u8 {
+    pub fn read_addr(&mut self) -> u8 {
         let value = self.reg_select;
         if self.trace {
-            println!("RTC: Read addr = 0x{:02X}", value);
+            rtc_log!(self, "RTC: Read addr = 0x{:02X}", value);
         }
         value
     }
@@ -52,7 +68,7 @@ impl Rtc {
     /// Write to port 0x22 (CLKCTL) — PIO control, accepted silently.
     pub fn write_control(&mut self, value: u8) {
         if self.trace {
-            println!("RTC: PIO control write 0x{:02X} (ignored)", value);
+            rtc_log!(self, "RTC: PIO control write 0x{:02X} (ignored)", value);
         }
     }
 
@@ -60,7 +76,7 @@ impl Rtc {
     pub fn write_data(&mut self, value: u8) {
         let reg = self.reg_select;
         if self.trace {
-            println!("RTC: Write reg 0x{:02X} = 0x{:02X}", reg, value);
+            rtc_log!(self, "RTC: Write reg 0x{:02X} = 0x{:02X}", reg, value);
         }
         match reg {
             0x00..=0x07 => {
@@ -74,7 +90,7 @@ impl Rtc {
                 if value == 0xFF {
                     self.time_offset_secs = 0;
                     if self.trace {
-                        println!("RTC: Counters reset");
+                        rtc_log!(self, "RTC: Counters reset");
                     }
                 }
             }
@@ -83,7 +99,7 @@ impl Rtc {
                 if value == 0xFF {
                     self.ram = [0; 8];
                     if self.trace {
-                        println!("RTC: RAM reset");
+                        rtc_log!(self, "RTC: RAM reset");
                     }
                 }
             }
@@ -103,7 +119,7 @@ impl Rtc {
             _ => 0,
         };
         if self.trace {
-            println!("RTC: Read reg 0x{:02X} = 0x{:02X}", reg, value);
+            rtc_log!(self, "RTC: Read reg 0x{:02X} = 0x{:02X}", reg, value);
         }
         value
     }
@@ -139,10 +155,24 @@ impl Rtc {
     }
 
     /// Read a counter register by computing current time from host clock + offset.
-    fn read_counter(&self, reg: u8) -> u8 {
+    fn read_counter(&mut self, reg: u8) -> u8 {
         let (ms, sec, min, hour, dow, day, month) = self.current_time();
         match reg {
-            0x00 => to_bcd((ms % 1000) as u8),
+            0x00 => {
+                // MM58167A counter 0: thousandths of seconds (ones digit, 0-9).
+                // Clock drivers read this twice to confirm the RTC is ticking.
+                // At unlimited CPU speed both reads land in the same wall-clock
+                // millisecond, returning the same value. Force the counter to
+                // advance so detection loops always see a changing clock.
+                let raw = (ms % 10) as u8;
+                let value = if raw == self.last_ms_value {
+                    (raw + 1) % 10
+                } else {
+                    raw
+                };
+                self.last_ms_value = value;
+                to_bcd(value)
+            },
             0x01 => to_bcd((ms / 10 % 100) as u8),
             0x02 => to_bcd(sec),
             0x03 => to_bcd(min),

@@ -302,9 +302,19 @@ fn main() {
                 std::process::exit(1);
             });
         machine.floppy_controller.trace_file = Some(fdc_file);
+        // RTC traces go to a companion file with "-rtc" suffix
+        let rtc_log_path = format!("{}-rtc.log",
+            log_path.strip_suffix(".log").unwrap_or(log_path));
+        let rtc_file = std::fs::File::create(&rtc_log_path)
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to create RTC trace log '{}': {}", rtc_log_path, e);
+                std::process::exit(1);
+            });
+        machine.rtc.trace_file = Some(rtc_file);
         eprintln!("Tracing ROM/BDOS to {}", log_path);
         eprintln!("Tracing HDC registers to {}", hdc_log_path);
         eprintln!("Tracing FDC reads to {}", fdc_log_path);
+        eprintln!("Tracing RTC to {}", rtc_log_path);
         trace_log = Some(f);
     }
 
