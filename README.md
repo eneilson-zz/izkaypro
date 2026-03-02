@@ -10,13 +10,17 @@ This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's wo
 
 ## Update 2/2026
 **The Ulimate Kaypro**
-A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model=turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
+A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
 
 ## But wait, there's more!
 **Add NZ-COM and ZSDOS to your ultimate Kaypro**
-Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/time stamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model turbo_rom_hd --hd ./disks/system/turborom_nz.hd`.  Once booted, type `nzcom`.  You will see the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
+Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  The CP/M replacement NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/time stamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model ultimate`.  Once booted, type `nzcom`.  You will see the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
+
+I was able to increase the TPA size of both TurboROM hd images to 62.5k (about 8k better than what you can get with the standard Kaypro 10 BIOS).  I also filled the turborom_nz.hd image (the image used with the ulimate Kaypro model) with useful applications and utilities. You can check these out in the different user directories
 
 **Welcome to peak 80's CP/M computing!**
+
+![Kaypro Ultimate Screen](doc/kaypro_ultimate.jpg)
 
 ## What is/was a Kaypro computer?
 
@@ -34,7 +38,7 @@ It's a typical CP/M computer of the early 80s, built on a metal case with standa
 - One parallel port (not emulated by izkaypro)
 
 ## Supported Models
-This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, TurboROM+HD, KayPLUS ROM-enabled 4-84s, and the Kaypro 10 with WD1002-05 hard disk controller.
+This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, TurboROM+HD, KayPLUS ROM-enabled 4-84s, and the Kaypro 10 with WD1002-05 hard disk controller.  The emulator will probably work with other Kaypro ROMs, I just haven't test them yet.
 
 | Model | ROM | Disk Format | Video Mode |
 |-------|-----|-------------|------------|
@@ -48,7 +52,7 @@ This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, Tu
 
 ## Configuration
 
-Edit `izkaypro.toml` to select the Kaypro model by uncommenting the desired configuration:
+Edit `izkaypro.toml` to select the default Kaypro model by uncommenting the desired configuration:
 
 ```toml
 # --- Kaypro II ---
@@ -71,9 +75,12 @@ model = "kaypro4_84"
 
 # --- Kaypro 10 ---
 # model = "kaypro10"
+
+# --- Ultimate Kaypro ---
+# model = "ultimate"
 ```
 
-Optional: override default disk images by adding:
+Optional: override default disk images in the .toml file by adding:
 ```toml
 disk_a = "disks/my_boot_disk.img"
 disk_b = "disks/my_data_disk.img"
@@ -81,20 +88,20 @@ disk_b = "disks/my_data_disk.img"
 ## How to build and run
 From the main directory:  
 - To build type **cargo build --release**  
-- To run **../target/release/izkaypro**  
+- To run **./target/release/izkaypro**  
 
 ## Usage examples
 
-izkaypro does not require installation, you just need the executable. It has the default ROM embedded as well as the boot CP/M disk and a blank disk. You can provide additional disk images as separate files.
+izkaypro does not require installation, you just need the executable. It has the default ROM embedded as well as the boot CP/M disk and a blank disk in the second drive (if applicable). You can provide additional disk images as separate files. There are lots of disk images to play with in the ./disks directory.
 
 Run using internal defaults (currently set to the Kaypro 4-84 machine)
 - ./target/release/izkaypro
 
 Run using a different machine and disk images
-- ./target/release/izkaypro --model=turbo_rom --driveb=./disks/games/Games.img
+- ./target/release/izkaypro --model turbo_rom --driveb ./disks/games/Games.img
 
 Run connecting to a serial device
-- ./target/release/izkapro --serial=/dev/tty.usbserial-A60288TV --driveb=./disks/comm/k4-84-qterm.img
+- ./target/release/izkapro --serial /dev/tty.usbserial-A60288TV --driveb ./disks/comm/k4-84-qterm.img
 
 ### What the emulator looks like
 By default, the emulator boots a Kaypro 4-84 machine with the CP/M 2.2g boot disk in drive A and a blank boot disk in drive B. You can type DIR to see a directory listing and B: to change drives. 
