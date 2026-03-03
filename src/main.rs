@@ -133,9 +133,9 @@ struct Cli {
     #[arg(long)]
     no_border: bool,
 
-    /// Launch graphical window (requires 'gui' feature)
+    /// Launch chargen rendering window (requires 'gui' feature)
     #[arg(long)]
-    gui: bool,
+    chargen: bool,
 }
 
 fn main() {
@@ -360,16 +360,16 @@ fn main() {
         }
     }
 
-    // GUI mode: launch graphical window instead of terminal rendering
+    // Chargen mode: launch graphical window instead of terminal rendering
     #[cfg(feature = "gui")]
-    if cli.gui {
+    if cli.chargen {
         println!("{}", welcome);
-        run_gui(&config, machine, cpu, trace_cpu, is_kaypro10_hardware, cli.speed);
+        run_gui(&config, machine, cpu, trace_cpu, is_kaypro10_hardware, cli.speed, screen.floppy_drive_labels);
         return;
     }
     #[cfg(not(feature = "gui"))]
-    if cli.gui {
-        eprintln!("Error: --gui requires building with: cargo run --features gui");
+    if cli.chargen {
+        eprintln!("Error: --chargen requires building with: cargo run --features gui");
         std::process::exit(1);
     }
 
@@ -697,6 +697,7 @@ fn run_gui(
     mut trace_cpu: bool,
     _is_kaypro10_hardware: bool,
     speed: Option<f64>,
+    floppy_drive_labels: (char, char),
 ) {
     use minifb::{Key, KeyRepeat, Window, WindowOptions, Scale};
 
@@ -746,9 +747,28 @@ fn run_gui(
     // GUI mode: keyboard input comes from minifb window, not stdin.
     machine.keyboard.gui_mode = true;
 
+    let mut show_help = false;
+    let mut show_status = false;
+    let mut speed_input: Option<String> = None; // Some = F9 input mode active
+    let mut clock_mhz = clock_mhz; // make mutable for speed changes
+
     while window.is_open() {
+        // Compute instructions per frame based on clock speed.
+        // At a fixed MHz, execute exactly enough cycles for one 60fps frame.
+        // At unlimited speed, run a large batch for fast emulation.
+        // When tracing, reduce batch so stdout doesn't block the GUI loop.
+        let batch: u64 = if trace_cpu {
+            1_000
+        } else if let Some(mhz) = clock_mhz {
+            // cycles_per_frame = target_cycles_per_sec / 60
+            let cycles_per_frame = (mhz * 1_000_000.0 / 60.0) as u64;
+            (cycles_per_frame / CYCLES_PER_INSTRUCTION).max(1000)
+        } else {
+            instructions_per_frame
+        };
+
         // Execute a batch of CPU instructions per frame
-        for _ in 0..instructions_per_frame {
+        for _ in 0..batch {
             cpu.execute_instruction(&mut machine);
             counter += 1;
             cycle_count += CYCLES_PER_INSTRUCTION;
@@ -760,24 +780,6 @@ fn run_gui(
             {
                 machine.patch_software_clock();
                 cpu.registers().set_pc(0x06CE);
-            }
-
-            // Clock speed throttling
-            if let Some(mhz) = clock_mhz {
-                let target_cycles_per_sec = (mhz * 1_000_000.0) as u64;
-                let elapsed = speed_start_time.elapsed();
-                let expected_cycles = (elapsed.as_secs_f64() * target_cycles_per_sec as f64) as u64;
-                if cycle_count > expected_cycles {
-                    let cycles_ahead = cycle_count - expected_cycles;
-                    let wait_secs = cycles_ahead as f64 / target_cycles_per_sec as f64;
-                    if wait_secs > 0.0001 {
-                        std::thread::sleep(Duration::from_secs_f64(wait_secs));
-                    }
-                }
-                if elapsed.as_secs() >= 1 {
-                    speed_start_time = Instant::now();
-                    cycle_count = 0;
-                }
             }
 
             // NMI processing
@@ -809,86 +811,200 @@ fn run_gui(
             }
         }
 
+        // Clock speed throttling: sleep once per frame if we're ahead of schedule.
+        if let Some(mhz) = clock_mhz {
+            let target_cycles_per_sec = (mhz * 1_000_000.0) as u64;
+            let elapsed = speed_start_time.elapsed();
+            let expected_cycles = (elapsed.as_secs_f64() * target_cycles_per_sec as f64) as u64;
+            if cycle_count > expected_cycles {
+                let cycles_ahead = cycle_count - expected_cycles;
+                let wait_secs = cycles_ahead as f64 / target_cycles_per_sec as f64;
+                if wait_secs > 0.0001 {
+                    std::thread::sleep(Duration::from_secs_f64(wait_secs));
+                }
+            }
+            if elapsed.as_secs() >= 1 {
+                speed_start_time = Instant::now();
+                cycle_count = 0;
+            }
+        }
+
         // Render frame (update_with_buffer pumps macOS events, must come
         // before key polling so get_keys_pressed returns current state).
         renderer.tick_frame();
+        renderer.render(&machine);
+
+        // Overlay: help and/or status
+        if show_help {
+            let (la, lb) = floppy_drive_labels;
+            let help_lines: Vec<String> = vec![
+                "izkaypro: Kaypro Emulator".into(),
+                "".into(),
+                format!("F1: Help  F2: Status  F4: Quit"),
+                format!("F5: Drive {}  F6: Drive {}  F7: Save BIOS", la, lb),
+                format!("F8: CPU Trace  F9: Set Speed"),
+                "".into(),
+                "Delete=DEL  Insert=LINEFEED".into(),
+                "ESC: Close window".into(),
+            ];
+            let refs: Vec<&str> = help_lines.iter().map(|s| s.as_str()).collect();
+            renderer.render_overlay(&refs, 2);
+        }
+        if show_status {
+            let (la, lb) = floppy_drive_labels;
+            let speed_str = match clock_mhz {
+                Some(mhz) => format!("{:.1} MHz", mhz),
+                None => "unlimited".to_string(),
+            };
+            let status_lines: Vec<String> = vec![
+                format!("{}: {}", la, machine.floppy_controller.media_a().info()),
+                format!("{}: {}", lb, machine.floppy_controller.media_b().info()),
+                format!("CPU speed: {}", speed_str),
+            ];
+            let start = if show_help { 14 } else { 2 };
+            let refs: Vec<&str> = status_lines.iter().map(|s| s.as_str()).collect();
+            renderer.render_overlay(&refs, start);
+        }
+        if let Some(ref buf) = speed_input {
+            let current = match clock_mhz {
+                Some(mhz) => format!("{:.1}", mhz),
+                None => "-1".to_string(),
+            };
+            let prompt = format!("CPU speed MHz (1-100, -1=unlimited) [{}]", current);
+            let input_line = format!("> {}_", buf);
+            let lines = [prompt.as_str(), input_line.as_str(), "", "Enter=confirm  ESC=cancel"];
+            let start = if show_help || show_status { 19 } else { 9 };
+            renderer.render_overlay(&lines, start);
+        }
+
         let (dw, dh) = renderer.display_size();
-        let buffer = renderer.render_to_display_buffer(&machine);
+        let buffer = renderer.render_to_display_buffer_only();
         window.update_with_buffer(buffer, dw, dh)
             .unwrap_or_else(|e| eprintln!("Display error: {}", e));
 
-        // Check ESC after update_with_buffer (which pumps macOS events).
-        if window.is_key_down(Key::Escape) {
-            break;
+        // ESC: dismiss overlays/input first, only exit when nothing is showing.
+        if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
+            if speed_input.is_some() {
+                speed_input = None;
+            } else if show_help || show_status {
+                show_help = false;
+                show_status = false;
+            } else {
+                break;
+            }
         }
 
         // Poll keyboard from minifb window
         let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
         let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
 
-        // Character keys (with auto-repeat)
-        for key in window.get_keys_pressed(KeyRepeat::Yes) {
-            let byte: Option<u8> = if let Some(base) = minifb_key_letter(key) {
-                if ctrl {
-                    Some(base + 1) // Ctrl+A=0x01 .. Ctrl+Z=0x1A
-                } else if shift {
-                    Some(base + b'A')
+        if let Some(ref mut buf) = speed_input {
+            // Speed input mode: capture keys into the input buffer
+            for key in window.get_keys_pressed(KeyRepeat::Yes) {
+                if let Some(digit) = minifb_key_digit(key) {
+                    buf.push((b'0' + digit) as char);
                 } else {
-                    Some(base + b'a')
+                    match key {
+                        Key::Period => buf.push('.'),
+                        Key::Minus  => buf.push('-'),
+                        Key::Backspace => { buf.pop(); },
+                        Key::Enter => {
+                            let input = buf.trim().to_string();
+                            if input.is_empty() {
+                                // Keep current setting
+                            } else if let Ok(mhz) = input.parse::<f64>() {
+                                if mhz < 0.0 {
+                                    clock_mhz = None;
+                                } else if mhz >= 1.0 && mhz <= 100.0 {
+                                    let rounded = (mhz * 2.0).round() / 2.0;
+                                    clock_mhz = Some(rounded);
+                                    speed_start_time = Instant::now();
+                                    cycle_count = 0;
+                                }
+                            }
+                            let speed_str = match clock_mhz {
+                                Some(mhz) => format!("{:.1} MHz", mhz),
+                                None => "unlimited".to_string(),
+                            };
+                            window.set_title(&format!("izkaypro — {} — Speed: {}", config.get_display_name(), speed_str));
+                            // Can't set speed_input = None here (borrowed),
+                            // so mark for clearing below.
+                            break;
+                        },
+                        _ => {}
+                    }
                 }
-            } else if let Some(digit) = minifb_key_digit(key) {
-                if shift {
-                    Some(match digit {
-                        0 => b')', 1 => b'!', 2 => b'@', 3 => b'#',
-                        4 => b'$', 5 => b'%', 6 => b'^', 7 => b'&',
-                        8 => b'*', 9 => b'(', _ => unreachable!(),
-                    })
-                } else {
-                    Some(b'0' + digit)
-                }
-            } else {
-                match key {
-                    Key::Enter     => Some(0x0D),
-                    Key::Backspace => Some(0x08),
-                    Key::Tab       => Some(0x09),
-                    Key::Space     => Some(0x20),
-                    Key::Delete    => Some(0x7F),
-                    Key::Insert    => Some(0x0A),
-                    Key::Up        => Some(0xF1),
-                    Key::Down      => Some(0xF2),
-                    Key::Left      => Some(0xF3),
-                    Key::Right     => Some(0xF4),
-                    Key::Comma        => Some(if shift { b'<' } else { b',' }),
-                    Key::Period       => Some(if shift { b'>' } else { b'.' }),
-                    Key::Slash        => Some(if shift { b'?' } else { b'/' }),
-                    Key::Semicolon    => Some(if shift { b':' } else { b';' }),
-                    Key::Apostrophe   => Some(if shift { b'"' } else { b'\'' }),
-                    Key::LeftBracket  => Some(if shift { b'{' } else { b'[' }),
-                    Key::RightBracket => Some(if shift { b'}' } else { b']' }),
-                    Key::Backslash    => Some(if shift { b'|' } else { b'\\' }),
-                    Key::Minus        => Some(if shift { b'_' } else { b'-' }),
-                    Key::Equal        => Some(if shift { b'+' } else { b'=' }),
-                    Key::Backquote    => Some(if shift { b'~' } else { b'`' }),
-                    _ => None,
-                }
-            };
-            if let Some(b) = byte {
-                machine.keyboard.gui_key_queue.push(b);
             }
-        }
+            // Clear input mode if Enter was pressed (check via Enter key state)
+            if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
+                speed_input = None;
+            }
+        } else {
+            // Normal mode: keys go to the emulator
+            // Character keys (with auto-repeat)
+            for key in window.get_keys_pressed(KeyRepeat::Yes) {
+                let byte: Option<u8> = if let Some(base) = minifb_key_letter(key) {
+                    if ctrl {
+                        Some(base + 1) // Ctrl+A=0x01 .. Ctrl+Z=0x1A
+                    } else if shift {
+                        Some(base + b'A')
+                    } else {
+                        Some(base + b'a')
+                    }
+                } else if let Some(digit) = minifb_key_digit(key) {
+                    if shift {
+                        Some(match digit {
+                            0 => b')', 1 => b'!', 2 => b'@', 3 => b'#',
+                            4 => b'$', 5 => b'%', 6 => b'^', 7 => b'&',
+                            8 => b'*', 9 => b'(', _ => unreachable!(),
+                        })
+                    } else {
+                        Some(b'0' + digit)
+                    }
+                } else {
+                    match key {
+                        Key::Enter     => Some(0x0D),
+                        Key::Backspace => Some(0x08),
+                        Key::Tab       => Some(0x09),
+                        Key::Space     => Some(0x20),
+                        Key::Delete    => Some(0x7F),
+                        Key::Insert    => Some(0x0A),
+                        Key::Up        => Some(0xF1),
+                        Key::Down      => Some(0xF2),
+                        Key::Left      => Some(0xF3),
+                        Key::Right     => Some(0xF4),
+                        Key::Comma        => Some(if shift { b'<' } else { b',' }),
+                        Key::Period       => Some(if shift { b'>' } else { b'.' }),
+                        Key::Slash        => Some(if shift { b'?' } else { b'/' }),
+                        Key::Semicolon    => Some(if shift { b':' } else { b';' }),
+                        Key::Apostrophe   => Some(if shift { b'"' } else { b'\'' }),
+                        Key::LeftBracket  => Some(if shift { b'{' } else { b'[' }),
+                        Key::RightBracket => Some(if shift { b'}' } else { b']' }),
+                        Key::Backslash    => Some(if shift { b'|' } else { b'\\' }),
+                        Key::Minus        => Some(if shift { b'_' } else { b'-' }),
+                        Key::Equal        => Some(if shift { b'+' } else { b'=' }),
+                        Key::Backquote    => Some(if shift { b'~' } else { b'`' }),
+                        _ => None,
+                    }
+                };
+                if let Some(b) = byte {
+                    machine.keyboard.gui_key_queue.push(b);
+                }
+            }
 
-        // Command keys (no auto-repeat)
-        for key in window.get_keys_pressed(KeyRepeat::No) {
-            match key {
-                Key::F1 => machine.keyboard.gui_command_queue.push(Command::Help),
-                Key::F2 => machine.keyboard.gui_command_queue.push(Command::ShowStatus),
-                Key::F4 => machine.keyboard.gui_command_queue.push(Command::Quit),
-                Key::F5 => machine.keyboard.gui_command_queue.push(Command::SelectDiskA),
-                Key::F6 => machine.keyboard.gui_command_queue.push(Command::SelectDiskB),
-                Key::F7 => machine.keyboard.gui_command_queue.push(Command::SaveMemory),
-                Key::F8 => machine.keyboard.gui_command_queue.push(Command::TraceCPU),
-                Key::F9 => machine.keyboard.gui_command_queue.push(Command::SetSpeed),
-                _ => {}
+            // Command keys (no auto-repeat)
+            for key in window.get_keys_pressed(KeyRepeat::No) {
+                match key {
+                    Key::F1 => machine.keyboard.gui_command_queue.push(Command::Help),
+                    Key::F2 => machine.keyboard.gui_command_queue.push(Command::ShowStatus),
+                    Key::F4 => machine.keyboard.gui_command_queue.push(Command::Quit),
+                    Key::F5 => machine.keyboard.gui_command_queue.push(Command::SelectDiskA),
+                    Key::F6 => machine.keyboard.gui_command_queue.push(Command::SelectDiskB),
+                    Key::F7 => machine.keyboard.gui_command_queue.push(Command::SaveMemory),
+                    Key::F8 => machine.keyboard.gui_command_queue.push(Command::TraceCPU),
+                    Key::F9 => machine.keyboard.gui_command_queue.push(Command::SetSpeed),
+                    _ => {}
+                }
             }
         }
 
@@ -907,11 +1023,71 @@ fn run_gui(
                         }
                         return;
                     },
+                    Command::Help => {
+                        show_help = !show_help;
+                    },
+                    Command::ShowStatus => {
+                        show_status = !show_status;
+                    },
                     Command::TraceCPU => {
                         trace_cpu = !trace_cpu;
                         cpu.set_trace(trace_cpu);
+                        let state = if trace_cpu { "ON" } else { "OFF" };
+                        window.set_title(&format!("izkaypro — {} — CPU trace: {}", config.get_display_name(), state));
                     },
-                    _ => {}
+                    Command::SelectDiskA => {
+                        let (la, _) = floppy_drive_labels;
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title(&format!("Select disk image for Drive {}", la))
+                            .add_filter("Disk Images", &["dsk", "img", "cpm", "raw"])
+                            .add_filter("All Files", &["*"])
+                            .pick_file()
+                        {
+                            let path_str = path.to_string_lossy();
+                            if let Err(err) = machine.floppy_controller.media_a_mut().load_disk(&path_str) {
+                                eprintln!("Error loading disk: {}", err);
+                            } else {
+                                machine.floppy_controller.disk_in_drive = true;
+                                machine.floppy_controller.motor_on = true;
+                                if _is_kaypro10_hardware {
+                                    let format = machine.floppy_controller.media_a().format;
+                                    let type_byte = match format {
+                                        media::MediaFormat::DsDd => 0x09,
+                                        media::MediaFormat::SsDd => 0x05,
+                                        _ => 0x01,
+                                    };
+                                    machine.poke(0xFFF6, type_byte);
+                                }
+                            }
+                        }
+                    },
+                    Command::SelectDiskB => {
+                        let (_, lb) = floppy_drive_labels;
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title(&format!("Select disk image for Drive {}", lb))
+                            .add_filter("Disk Images", &["dsk", "img", "cpm", "raw"])
+                            .add_filter("All Files", &["*"])
+                            .pick_file()
+                        {
+                            let path_str = path.to_string_lossy();
+                            if let Err(err) = machine.floppy_controller.media_b_mut().load_disk(&path_str) {
+                                eprintln!("Error loading disk: {}", err);
+                            }
+                        }
+                    },
+                    Command::SaveMemory => {
+                        match machine.save_bios() {
+                            Ok(filename) => {
+                                window.set_title(&format!("izkaypro — {} — BIOS saved as {}", config.get_display_name(), filename));
+                            }
+                            Err(err) => {
+                                window.set_title(&format!("izkaypro — {} — Error: {}", config.get_display_name(), err));
+                            }
+                        }
+                    },
+                    Command::SetSpeed => {
+                        speed_input = Some(String::new());
+                    },
                 }
             }
             machine.keyboard.commands.clear();

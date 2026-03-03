@@ -8,12 +8,19 @@ This is a Kaypro emulator that runs in a terminal window on Linux, OSX, FreeBSD,
 This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
 
 
+## Update 3/2026
+**Chargen GUI Rendering**
+
+A graphical rendering mode using character generator ROMs is now available. Launch with `--chargen` to open a native window that renders the emulated display using the actual Kaypro chargen ROM, with proper scanline doubling for CRT-like aspect ratio on 8-row models. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Requires building with `cargo build --release --features gui`.
+
 ## Update 2/2026
 **The Ulimate Kaypro**
+
 A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
 
 ## But wait, there's more!
 **Add NZ-COM and ZSDOS to your ultimate Kaypro**
+
 Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  The CP/M replacement NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/time stamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model ultimate`.  Once booted, type `nzcom`.  You will see the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
 
 I was able to increase the TPA size of both TurboROM hd images to 62.5k (about 8k better than what you can get with the standard Kaypro 10 BIOS).  I also filled the turborom_nz.hd image (the image used with the ulimate Kaypro model) with useful applications and utilities. You can check these out in the different user directories
@@ -49,6 +56,7 @@ This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, Tu
 | TurboROM 3.4 + HD | trom34 | DSDD floppies + HD | SY6545 CRTC |
 | KayPLUS 84 | kplus84 | DSDD (400KB) | SY6545 CRTC |
 | Kaypro 10 | 81-478c | 10MB HD + DSDD floppy | SY6545 CRTC |
+| Ultimate (NZ-COM/ZSDOS) | trom34 | DSDD floppies + HD | SY6545 CRTC |
 
 ## Configuration
 
@@ -109,7 +117,7 @@ By default, the emulator boots a Kaypro 4-84 machine with the CP/M 2.2g boot dis
 ![Kaypro 4-84 Screen](doc/kaypro_4-84_screen.jpg)
 
 ### Usage with external images
-The ./disks/ directory contains a number of Kaypro disk images to try. When starting the emulator, you can provide disk images on the command with the --drivea=path.to.disk.image or --driveb=path.to.disk.image parameters.
+The ./disks/ directory contains a number of Kaypro disk images to try. When starting the emulator, you can provide disk images on the command with the --drivea path.to.disk.image or --driveb path.to.disk.image parameters.
 
 While using the emulator, press F5 or F6 to insert a new disk into drives A or B respectively (Note: CP/M likes to have the boot disk stay in drive A).  Press F4 to exit back to the host shell prompt.
 
@@ -147,13 +155,16 @@ izkaypro [OPTIONS]
 OPTIONS:
     -m, --model <MODEL>      Kaypro model preset
                              [models: kaypro_ii, kaypro4_83, kaypro4_84,
-                              turbo_rom, turbo_rom_hd, kayplus_84, kaypro10, custom]
+                              turbo_rom, turbo_rom_hd, ultimate, kayplus_84,
+                              kaypro10, custom]
     -a, --drivea <FILE>      Disk image file for drive A
     -b, --driveb <FILE>      Disk image file for drive B
         --hd <FILE>          Hard disk image file for WD1002 models
         --rom <FILE>         Custom ROM file (implies --model=custom)
         --speed <MHZ>        CPU clock speed in MHz (1-100, default: unlimited)
         --serial <DEVICE>    Connect SIO-1 Port A to a serial device
+        --chargen            Launch chargen rendering window (requires 'gui' feature)
+        --no-border          Run without screen border (fits in 80x26 terminal)
     -d, --diagnostics        Run ROM and RAM diagnostics then exit
         --boot-test          Run headless boot tests for all models then exit
     -h, --help               Print help information

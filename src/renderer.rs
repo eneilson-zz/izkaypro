@@ -187,9 +187,9 @@ impl Renderer {
         &self.framebuffer
     }
 
-    /// Render and return display buffer (with scanline doubling for 8-row ROMs).
-    pub fn render_to_display_buffer(&mut self, machine: &KayproMachine) -> &[u32] {
-        self.render(machine);
+    /// Apply scanline doubling to the already-rendered framebuffer and return
+    /// the display buffer. Call after `render()` and any overlay rendering.
+    pub fn render_to_display_buffer_only(&mut self) -> &[u32] {
         if self.scanline_double {
             for y in 0..self.height {
                 let src_start = y * self.width;
@@ -212,6 +212,90 @@ impl Renderer {
             (self.width, self.height * 2)
         } else {
             (self.width, self.height)
+        }
+    }
+
+    /// Render a text overlay box onto the framebuffer.
+    /// `lines` is a slice of strings to display. The box is centered horizontally,
+    /// positioned starting at `start_row` (in character rows).
+    pub fn render_overlay(&mut self, lines: &[&str], start_row: usize) {
+        let box_width = lines.iter().map(|l| l.len()).max().unwrap_or(0) + 4; // 2 border + 2 padding
+        let box_left = if box_width < 80 { (80 - box_width) / 2 } else { 0 };
+
+        let border_fg = 0x0066FF66u32; // bright green
+        let border_bg = 0x00001100u32; // very dark green
+        let text_fg = self.fg_color;
+        let text_bg = border_bg;
+
+        // Top border
+        let mut top = String::with_capacity(box_width);
+        top.push('+');
+        for _ in 0..box_width - 2 { top.push('-'); }
+        top.push('+');
+        self.render_text_line(&top, start_row, box_left, border_fg, border_bg);
+
+        // Content lines
+        for (i, line) in lines.iter().enumerate() {
+            let mut row_text = String::with_capacity(box_width);
+            row_text.push('|');
+            row_text.push(' ');
+            row_text.push_str(line);
+            while row_text.len() < box_width - 1 { row_text.push(' '); }
+            row_text.push('|');
+            self.render_text_line(&row_text, start_row + 1 + i, box_left, text_fg, text_bg);
+            // Redraw border chars with border colors
+            self.render_char_at('|', start_row + 1 + i, box_left, border_fg, border_bg);
+            self.render_char_at('|', start_row + 1 + i, box_left + box_width - 1, border_fg, border_bg);
+        }
+
+        // Bottom border
+        let mut bottom = String::with_capacity(box_width);
+        bottom.push('+');
+        for _ in 0..box_width - 2 { bottom.push('-'); }
+        bottom.push('+');
+        self.render_text_line(&bottom, start_row + 1 + lines.len(), box_left, border_fg, border_bg);
+    }
+
+    /// Render a single line of text at a given character row and column.
+    fn render_text_line(&mut self, text: &str, row: usize, col: usize, fg: u32, bg: u32) {
+        for (i, ch) in text.chars().enumerate() {
+            self.render_char_at(ch, row, col + i, fg, bg);
+        }
+    }
+
+    /// Render a single character at the given character row/col position in the framebuffer.
+    fn render_char_at(&mut self, ch: char, row: usize, col: usize, fg: u32, bg: u32) {
+        if col >= 80 { return; }
+        let display_rows = self.height / self.scanlines_per_char;
+        if row >= display_rows { return; }
+
+        let code = if (ch as u32) < 128 { ch as u8 } else { b'?' };
+        let char_index = if self.scanlines_per_char == 16 {
+            code as usize
+        } else {
+            (code & 0x7F) as usize
+        };
+        let rom_offset = self.chargen_base + char_index * self.scanlines_per_char;
+
+        for scanline in 0..self.scanlines_per_char {
+            let mut rom_byte = if rom_offset + scanline < self.chargen.len() {
+                self.chargen[rom_offset + scanline]
+            } else {
+                0x00
+            };
+            if self.inverted_polarity {
+                rom_byte ^= 0xFF;
+            }
+
+            let fb_y = row * self.scanlines_per_char + scanline;
+            let fb_x = col * 8;
+            let fb_offset = fb_y * self.width + fb_x;
+            if fb_offset + 8 > self.framebuffer.len() { return; }
+
+            for pixel_col in 0..8 {
+                let bit = (rom_byte >> (7 - pixel_col)) & 1;
+                self.framebuffer[fb_offset + pixel_col] = if bit != 0 { fg } else { bg };
+            }
         }
     }
 }
