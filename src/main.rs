@@ -136,6 +136,22 @@ struct Cli {
     /// Launch chargen rendering window (requires 'gui' feature)
     #[arg(long)]
     chargen: bool,
+
+    /// Phosphor color for chargen mode [green, amber, white, blue] (default: green)
+    #[arg(long, value_name = "COLOR", default_value = "green")]
+    phosphor: String,
+
+    /// Override phosphor foreground color (hex, e.g. "#33FF33")
+    #[arg(long, value_name = "HEX")]
+    phosphor_fg: Option<String>,
+
+    /// Override phosphor background color (hex, e.g. "#002200")
+    #[arg(long, value_name = "HEX")]
+    phosphor_bg: Option<String>,
+
+    /// Override phosphor dim color (hex, e.g. "#1A801A")
+    #[arg(long, value_name = "HEX")]
+    phosphor_dim: Option<String>,
 }
 
 fn main() {
@@ -363,8 +379,30 @@ fn main() {
     // Chargen mode: launch graphical window instead of terminal rendering
     #[cfg(feature = "gui")]
     if cli.chargen {
+        let mut phosphor = renderer::PhosphorColors::from_name(&cli.phosphor).unwrap_or_else(|| {
+            eprintln!("Unknown phosphor color '{}', using green. Options: green, amber, white, blue", cli.phosphor);
+            renderer::PHOSPHOR_GREEN
+        });
+        if let Some(ref hex) = cli.phosphor_fg {
+            match renderer::PhosphorColors::parse_hex(hex) {
+                Some(c) => phosphor.fg = c,
+                None => eprintln!("Invalid --phosphor-fg '{}', expected hex like #33FF33", hex),
+            }
+        }
+        if let Some(ref hex) = cli.phosphor_bg {
+            match renderer::PhosphorColors::parse_hex(hex) {
+                Some(c) => phosphor.bg = c,
+                None => eprintln!("Invalid --phosphor-bg '{}', expected hex like #002200", hex),
+            }
+        }
+        if let Some(ref hex) = cli.phosphor_dim {
+            match renderer::PhosphorColors::parse_hex(hex) {
+                Some(c) => phosphor.dim = c,
+                None => eprintln!("Invalid --phosphor-dim '{}', expected hex like #1A801A", hex),
+            }
+        }
         println!("{}", welcome);
-        run_gui(&config, machine, cpu, trace_cpu, is_kaypro10_hardware, cli.speed, screen.floppy_drive_labels);
+        run_gui(&config, machine, cpu, trace_cpu, is_kaypro10_hardware, cli.speed, screen.floppy_drive_labels, phosphor);
         return;
     }
     #[cfg(not(feature = "gui"))]
@@ -698,10 +736,11 @@ fn run_gui(
     _is_kaypro10_hardware: bool,
     speed: Option<f64>,
     floppy_drive_labels: (char, char),
+    phosphor: renderer::PhosphorColors,
 ) {
     use minifb::{Key, KeyRepeat, Window, WindowOptions, Scale};
 
-    let mut renderer = renderer::Renderer::new(config.get_chargen_path());
+    let mut renderer = renderer::Renderer::new(config.get_chargen_path(), phosphor);
 
     // Kaypro II/4-83: 640×192 native → double scanlines to 640×384 for CRT
     // aspect ratio, then Scale::X2 → 1280×768. Other models: 640×400 × X2.

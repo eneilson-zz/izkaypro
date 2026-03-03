@@ -2,13 +2,65 @@ use std::fs;
 
 use super::kaypro_machine::{KayproMachine, VideoMode};
 
-// Green phosphor colors (0xRRGGBB, minifb uses 0RGB with alpha=0)
-const FG_COLOR: u32 = 0x0033FF33;
-const BG_COLOR: u32 = 0x00002200;
-const DIM_COLOR: u32 = 0x001A801A;
-
 // Blink cycle: ~1.28s at 60fps ≈ 77 frames per cycle
 const BLINK_PERIOD: u32 = 77;
+
+/// Phosphor color scheme for the chargen display.
+#[derive(Clone, Copy)]
+pub struct PhosphorColors {
+    pub fg: u32,
+    pub bg: u32,
+    pub dim: u32,
+}
+
+impl PhosphorColors {
+    pub fn from_name(name: &str) -> Option<PhosphorColors> {
+        match name.to_lowercase().as_str() {
+            "green" => Some(PHOSPHOR_GREEN),
+            "amber" => Some(PHOSPHOR_AMBER),
+            "white" => Some(PHOSPHOR_WHITE),
+            "blue" => Some(PHOSPHOR_BLUE),
+            _ => None,
+        }
+    }
+
+    /// Parse a hex color string like "#33FF33" or "33FF33" into a 0x00RRGGBB u32.
+    pub fn parse_hex(s: &str) -> Option<u32> {
+        let hex = s.strip_prefix('#').unwrap_or(s);
+        if hex.len() != 6 {
+            return None;
+        }
+        u32::from_str_radix(hex, 16).ok()
+    }
+}
+
+// Green P1 phosphor (Kaypro default)
+pub const PHOSPHOR_GREEN: PhosphorColors = PhosphorColors {
+    fg:  0x0033FF33,
+    bg:  0x00002200,
+    dim: 0x001A801A,
+};
+
+// Amber P3 phosphor
+pub const PHOSPHOR_AMBER: PhosphorColors = PhosphorColors {
+    fg:  0x00FFB833,
+    bg:  0x00221100,
+    dim: 0x00805C1A,
+};
+
+// White P4 phosphor
+pub const PHOSPHOR_WHITE: PhosphorColors = PhosphorColors {
+    fg:  0x00E0E0E0,
+    bg:  0x00181818,
+    dim: 0x00707070,
+};
+
+// Cool blue phosphor
+pub const PHOSPHOR_BLUE: PhosphorColors = PhosphorColors {
+    fg:  0x0066BBFF,
+    bg:  0x00001122,
+    dim: 0x00335E80,
+};
 
 pub struct Renderer {
     chargen: Vec<u8>,
@@ -34,7 +86,7 @@ pub struct Renderer {
 
 impl Renderer {
     /// Load character generator ROM and auto-detect 2KB (8-row) vs 4KB (16-row).
-    pub fn new(chargen_path: &str) -> Renderer {
+    pub fn new(chargen_path: &str, phosphor: PhosphorColors) -> Renderer {
         let chargen = fs::read(chargen_path)
             .unwrap_or_else(|e| panic!("Failed to load character ROM '{}': {}", chargen_path, e));
 
@@ -62,15 +114,15 @@ impl Renderer {
             scanlines_per_char,
             chargen_base,
             inverted_polarity,
-            framebuffer: vec![BG_COLOR; width * height],
-            display_buffer: vec![BG_COLOR; width * display_height],
+            framebuffer: vec![phosphor.bg; width * height],
+            display_buffer: vec![phosphor.bg; width * display_height],
             width,
             height,
             scanline_double,
             frame_counter: 0,
-            fg_color: FG_COLOR,
-            bg_color: BG_COLOR,
-            dim_color: DIM_COLOR,
+            fg_color: phosphor.fg,
+            bg_color: phosphor.bg,
+            dim_color: phosphor.dim,
         }
     }
 

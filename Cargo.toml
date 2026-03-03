@@ -15,7 +15,7 @@ minifb = { version = "0.28", optional = true }
 rfd = { version = "0.15", optional = true }
 
 [features]
-default = []
+default = ["gui"]
 gui = ["minifb", "rfd"]
 
 [target.'cfg(unix)'.dependencies]

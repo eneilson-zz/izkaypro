@@ -11,7 +11,21 @@ This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's wo
 ## Update 3/2026
 **Chargen GUI Rendering**
 
-A graphical rendering mode using character generator ROMs is now available. Launch with `--chargen` to open a native window that renders the emulated display using the actual Kaypro chargen ROM, with proper scanline doubling for CRT-like aspect ratio on 8-row models. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Requires building with `cargo build --release --features gui`.
+Kaypro screen rendering using character generator ROMs is now available. Launch with `--chargen` to open a native window that renders the emulated display using the actual Kaypro chargen ROM, with proper scanline doubling for CRT-like aspect ratio on 8-row models. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Chargen support is included in the default build.
+
+Phosphor color options are available via `--phosphor`:
+- `green` (default) — P1 green phosphor: fg=#33FF33, bg=#002200, dim=#1A801A
+- `amber` — P3 amber phosphor: fg=#FFB833, bg=#221100, dim=#805C1A
+- `white` — P4 white phosphor: fg=#E0E0E0, bg=#181818, dim=#707070
+- `blue` — Cool blue phosphor: fg=#66BBFF, bg=#001122, dim=#335E80
+
+Individual colors can be overridden with `--phosphor-fg`, `--phosphor-bg`, and `--phosphor-dim` using hex values:
+
+```
+./izkaypro --chargen --phosphor amber
+./izkaypro --chargen --phosphor-fg "#FF6600" --phosphor-bg "#110500" --phosphor-dim "#803300"
+./izkaypro --chargen --phosphor white --phosphor-dim "#909090"
+```
 
 ## Update 2/2026
 **The Ulimate Kaypro**
@@ -163,7 +177,11 @@ OPTIONS:
         --rom <FILE>         Custom ROM file (implies --model=custom)
         --speed <MHZ>        CPU clock speed in MHz (1-100, default: unlimited)
         --serial <DEVICE>    Connect SIO-1 Port A to a serial device
-        --chargen            Launch chargen rendering window (requires 'gui' feature)
+        --chargen            Launch chargen rendering window
+        --phosphor <COLOR>   Phosphor color: green (default), amber, white, blue
+        --phosphor-fg <HEX>  Override foreground color (e.g. "#33FF33")
+        --phosphor-bg <HEX>  Override background color (e.g. "#002200")
+        --phosphor-dim <HEX> Override dim/half-intensity color (e.g. "#1A801A")
         --no-border          Run without screen border (fits in 80x26 terminal)
     -d, --diagnostics        Run ROM and RAM diagnostics then exit
         --boot-test          Run headless boot tests for all models then exit

@@ -1,0 +1,437 @@
+=====================================================================
+
+                      GRAPHICS ON CP/M KAYPROS
+
+                          by Peter Donnelly
+                     964 Heywood Ave., Apt. 220
+                           Victoria, B.C.
+                           Canada V8V 2Y5
+
+                            January 1986
+
+=====================================================================
+
+     The graphics capabilities of the Kaypro are generally not well 
+documented; indeed, buyers of the new Kaypro 1 might read the user's 
+guide from cover to cover without obtaining the slightest hint that 
+their machine has graphics at all. 
+      The purpose of this article is to assemble some facts so that 
+the reader can use the Kaypro graphics fully - at least, as fully as 
+can be done without resorting to machine language. As far as I know, 
+what is said here applies to all CP/M Kaypros manufactured since 
+1984, and to earlier model 10s.
+
+1. ESCAPE SEQUENCES
+
+     Some screen functions are handled through escape sequences: that 
+is, a string consisting of the ^[ character plus one or more other 
+characters is sent to the screen. In MBASIC the sequence "ESCape, B, 
+0" (as it appears in the Kaypro manual) would take the form:
+
+     PRINT CHR$(27) + "B0"; 
+or   PRINT CHR$(27); "B0";
+
+When variable integers form part of an escape sequence they are 
+sent in the form of the character having that ASCII decimal number. 
+For example, to position the cursor at row R, column C, where the 
+general form of the sequence is "ESC, =, row + 32, col + 32", you 
+would use this command:
+
+     PRINT CHR$(27) + "=" + CHR$(R + 32) + CHR$(C + 32);
+
+Escape sequences can also be sent from the system prompt by pressing 
+the ESC key followed by the appropriate letter keys, then RETURN. The 
+system will echo the command to the screen, followed by a question 
+mark, and as a result the escape sequence will take effect. This is 
+handy when you break out of a program unexpectedly and find that your 
+cursor has disappeared or that everything is still in inverse video, 
+and you want to restore things to normal without a cold boot. (It's 
+also handy - though this has nothing to do with graphics - for 
+sending escape sequences to set up a printer. Just add ^P to the 
+sequence.)
+
+2. CONTROL CHARACTERS
+
+     Certain control characters, when ordered to be printed to the 
+CRT, will manipulate screen output; these are summarized in the 
+appendix. They can be sent by a program, or like escape sequences 
+they can be entered at the system prompt. For example, to clear the 
+screen at the prompt just type CTRL-Z RETURN.
+     Cursor movement through control characters is limited. You 
+cannot backspace, for example, over an empty part of the screen; 
+something has to have been printed there, if only spaces. 
+
+3. CURSOR ADDRESSING
+
+     The cursor can be sent to any point on the screen through the 
+escape sequence mentioned in paragraph 1 above. 
+     MBASIC has a peculiarity worth mentioning. Because there is a 
+limit on how much it will handle as a string without a carriage 
+return, you cannot just keep sending the cursor from one point to 
+another with an input loop; if you do, MBASIC will respond by 
+spitting out odd characters and line feeds. The solution is to insert 
+into the loop another command like PRINT CHR$(30) (with no 
+semicolon).
+     Remember, every time the cursor prints a character it will 
+advance. Thus the last column of row 24 is effectively off-limits if 
+you want to preserve a whole screenful of graphics; when you print 
+something there the cursor will try to drop down and thus force 
+everything to scroll up a line.
+
+4. STATUS LINE
+
+     The so-called status line is the 25th line of the screen, and it 
+is only accessible through direct cursor addressing. If you turn on 
+"status line preservation," anything printed on the line will remain 
+there despite whatever happens on the screen above, whether scrolling 
+or clearing.
+ 
+5. SPECIAL EFFECTS
+
+     The four special video effects - inverse video, reduced 
+intensity, blinking, and underlining - can be toggled on and off with 
+escape sequences and can be used in any combination. They affect only 
+what is printed while they are toggled on, and they apply to all 
+characters, whether keyboard characters or graphics.
+     The Kaypro has no true highlighting; the only way the effect can 
+be emulated is to print most things at half-intensity and the 
+"highlighted" strings at normal intensity. But of course this makes 
+it necessary for the user to adjust his screen brightness control. 
+     My own view is that half-intensity should never be used for text 
+except in combination with inverse video. A number of programs, 
+including a few commercial ones, use a combination of normal and 
+half-intensity text to highlight key letters in menus and so on, and 
+the result is less than satisfactory. Most people, I'm sure, have 
+their screens adjusted so that normal text is comfortably readable, 
+and at this setting half-intensity uninverted text almost disappears. 
+(Particularly puzzling is TURBO PASCAL's installation for "Kaypro 
+with highlight," where what ought to be highlighted is in fact 
+printed at half-intensity; and if you turn your screen up to make 
+these parts reasonably visible, everything else including the text on 
+the editing screen becomes uncomfortably bright. While it's possible 
+to modify this feature, the installation program doesn't allow a long 
+enough escape sequence to set highlighting to half-intensity AND 
+inverse.)
+
+6. THE ASCII GRAPHICS
+
+(A.) In addition to the ordinary keyboard characters, the Kaypro 
+terminal is capable of displaying a number of graphics characters 
+each occupying one "cell," the screen being made up of 25 by 80 such 
+cells. All post-1984 machines have what might be called "block 
+graphics" associated with the upper part of the ASCII set. Any of 
+these graphics can be displayed by a simple command to send the 
+character of the appropriate number to the screen, e.g. PRINT 
+CHR$(255). 
+     The characters are made up of eight pixels or tiny squares, each 
+either green ("on") or black ("off"). These graphics can be seen as 
+eight-bit binaries where the upper right corner is the least 
+significant bit, the upper left the next most significant, and so on 
+to the lower left corner, which represents the most significant bit, 
+or 2 to the 7th power. A cell may be mapped as follows, with the 
+numbers representing the amount added to the bit value of the 
+character if that pixel is "on":
+
+                          -----------
+                          |  2 |  1 |
+                          -----------
+                          |  8 |  4 |
+                          -----------
+                          | 32 | 16 |
+                          -----------
+                          |128 | 64 |
+                          -----------
+
+     The first of the graphics characters is #128, a blank space, 
+with a bit value of 0; the last is #255, which is lacking only the 
+lower left corner and so has a value of the sum of the first 7 powers 
+of 2, or 127. It is thus possible to derive the form of any of these 
+graphics characters from its ASCII number, the bit value being the 
+ASCII number minus 128. 
+     Having reached the upper limit of the ASCII set without finding 
+any characters which have the lower left corner filled in, we now 
+have to go into inverse video, where we encounter another 128 
+symbols, each the negative image of its counterpart and thus having 
+the inverse (or ones complement) bit image; #128, for example, binary 
+0000 0000, now becomes a full block whose on-bits, 1111 1111, total 
+255. The bit value of each inverse character is 383 minus its ASCII 
+number.
+     The state of any pixel in a given graphics character can be 
+determined by an arithmetic "and" test. Let "y" be the bit value of 
+the character as determined from its ASCII number and the state of 
+inverse video, let "x" be the power of 2 corresponding to the 
+position of the pixel in question, and let "pixelon" be a Boolean 
+returning "true" if the pixel is illuminated. The statement in Pascal 
+would then take the form:
+
+     if (x and y) > 0 then pixelon else not pixelon;
+
+This determination is the key to writing a routine to translate the 
+screen graphics into terms your printer can understand. (See section 
+11 below.)
+
+(B.)  The Kaypro video controller is capable of displaying a number 
+of other graphics including thin horizontal, vertical, and diagonal 
+lines, triangular blocks, and mathematical symbols. Each of these 
+graphics is, again, associated with an ASCII number, this time in the 
+range 0-31. (One of the triangles also shows up mysteriously as #127, 
+the DEL character.) 
+     Unfortunately, these graphics won't always appear on demand. To 
+begin with, your programming language may interpret a character in 
+this range as a control code. MBASIC, for example, always treats 
+CHR$(9) as a horizontal tab. (Ever notice that you can't use it as 
+part of an escape sequence in an MBASIC printer set-up?) Second, the 
+operating system itself may also insist on treating certain 
+characters as control codes (e.g. #7 as a bell, #13 as a carriage 
+return). 
+     In the Kaypros running CP/M 2.2u it appears that ALL characters 
+in the lower range are scooped up before reaching the screen, even 
+those that have no active control function. A command like PRINT 
+CHR$(1) produces nothing at all.
+     On "older newer" models like my '84 2X it's possible to print 20 
+or so of these low-range characters with simple "write" commands in 
+Pascal, and most of these are also accessible through MBASIC. I can 
+also conjure them up by typing the matching control code at the 
+system prompt and pressing RETURN. But there's no way to coax out the 
+graphics that lie behind active control codes like ^G, ^J, ^M, and 
+^Z.
+     It is a frustrating situation for the programmer. One could have 
+hoped for a simple escape sequence that would somehow disable the 
+control codes and allow the full potential of the video chip to be 
+exploited. However, if such a sequence exists it is a well-kept 
+secret. Consequently if you want to see the full menu of Kaypro 
+graphics, or use them, you'll have to turn to the KBOARD segment of 
+the commercial program REMBRANDT (by DG Systems), which accesses them 
+by doing an end-run around the BIOS and taking direct control of the 
+video chip. Where the capable author of that program has gone I dare 
+say not many will follow.
+
+
+7. PIXEL GRAPHICS
+
+     Since each block graphics character is made up of 4 rows and 2 
+columns of pixels, the screen may be seen as an array of 100 by 160 
+pixels, and with the appropriate escape sequence we can fill in any 
+individual pixel on the screen. 
+     The terminal is not actually printing every pixel location 
+independently; it's really just assigning an ASCII block graphic to 
+each cell of eight pixel locations and changing it whenever a pixel 
+is added or taken away. For the programmer this doesn't make a great 
+deal of difference, but you will notice that a pixel is printed in 
+half-intensity when it is plunked down among half-intensity 
+neighbors. You will also find that pixels can't be printed in a cell 
+where there is already a keyboard character, even if there wouldn't 
+be any actual overlap.
+
+8. VIDEO MODE
+
+     So far all I've been able to discover about video mode is that 
+when it's turned on you must print a graphics character twice, or two 
+graphics characters in succession, before anything appears on the 
+screen. Then what you see is the first character printed normally, 
+and the second character superimposed with the bits "swapped"; i.e. 
+the value of the least significant bit is traded for the most 
+significant, and so on. Thus #129 (upper right bit "on") and #255 
+(lower left bit "off") can be printed together to make a solid block, 
+and indeed all the block graphics with the high bit (lower left 
+corner) "on" can be generated by superimposing a "swapped" #129 on 
+the ASCII characters from #128 to #255. This is another way of doing 
+what one can do with inverse video; whether it has any advantages I 
+cannot say.
+
+9. THE TYPE COMMAND
+
+     The TYPE command will read any text file, and text files can 
+include graphics and escape sequences. 
+     Most word-processing programs won't normally allow the insertion 
+of non-keyboard characters into text. You can sneak them in with 
+Xpert Software's XTRAKEY, which allows you to turn any keyboard 
+character into a block graphic by setting the high bit "on," i.e. 
+adding 128 to the ASCII number. The graphics won't show up within the 
+word-processing program, but they will be TYPEable. (WordStar users 
+must go into non-document mode to prepare TYPEable files, since 
+document mode uses the high bit for its own purposes.) 
+     For portability, TYPEable files and indeed any graphics routines 
+shouldn't include characters that might not show up on another 
+machine such as the Kaypro 1 - namely the phantom graphics from the 
+lower part of the ASCII set. On such machines these characters will 
+not even show up as spaces; rather nothing at all will be printed, 
+and so the alignment of columns will be thrown out of whack.
+
+10. GRAPHICS UNDER ZCPR
+
+     The alternative operating system ZCPR disables the Kaypro 
+graphics, and while there is a command to re-enable them, helpful 
+programmers can save the user the trouble by poking the byte FF into 
+location 004F at the beginning of any graphics routine, and restoring 
+the value 00 at the end. There appears to be no conflict with CP/M.
+
+11. PRINTING GRAPHICS
+
+     It would be nice if you could print any graphics character just 
+by sending the appropriate ASCII number to the printer, but 
+unfortunately this is not the case. Most dot-matrix printers have 
+italics and international characters associated with the upper half 
+of the ASCII set; if there is an alternative graphics set, it will be 
+for the IBM system. 
+     Consequently, to print the Kaypro block graphics you must put 
+the printer in "graphics mode" and define which pins are to be fired 
+at each impact. This means breaking the graphic character into its 
+two component columns and examining each of these for "on" pixels, 
+then converting the bit-sum of the column into the byte required by 
+your printer so that it knows which pins to fire as it prints that 
+column. How many pins you will use for each pixel, and how many times 
+they will be fired, will depend on the size and proportions of the 
+desired result. For example, using standard density graphics on the 
+Epson - 480 dots per line - to reproduce the full width of the screen 
+(160 pixel columns) as the full width of the paper, the pins would be 
+fired 3 times for every column, and 2 of the 8 pins would be used for 
+each "on" pixel.
+     As for the graphics in the lower part of the ASCII set, they 
+would presumably have to be individually designed as "downloadable 
+characters" - a large task - and then downloaded to the printer to be 
+printed in text mode. 
+
+12. AVAILABLE SOFTWARE
+
+     At least three commercial and two non-commercial drawing 
+programs are now available for the Kaypro. I will describe briefly 
+those I've had experience with. 
+
+SCS-DRAW (Second City Software, Box 267960, Chicago IL 60626)
+
+     A very likeable program for designing images to be printed to 
+paper. Drawing is done in black on a large green canvas of 336 x 362 
+pixels, a portion of which is displayed in a window that occupies 
+about two-thirds of the screen, the rest being taken up by a menu and 
+window-position indicator. While inversion is used to good effect 
+(you can draw a line that shows black against green and green against 
+black), every pixel is simply either on or off, and hence there are 
+no real video effects like half-intensity or blinking. A nice touch 
+is that you can draw or erase a single pixel without leaving "move" 
+status, saving much confusion. Text can be added in a choice of 
+rudimentary fonts and enlarged to as much as banner size. There are 
+many other features including cut-and-paste, merging of images in 
+various ways, automatic drawing of lines, circles, and rectangles, 
+easy block erase, rapid cursor moves, pattern-fill, and on-screen 
+enlargement in two separate dimensions. Options at the printing stage 
+enable further enlargement, flipping, rotating, and repeating of 
+images. The program is helpful, quick, and easy to use throughout. 
+
+REMBRANDT (DG Systems, 22458 Ventura Bvd., Ste. E, Woodland Hills, CA 
+91364)
+
+     REMBRANDT is both screen- and printer-oriented, a good all-round 
+program that is the only one to exploit all the graphics capabilities 
+of the Kaypro. Drawing is done with the entire ASCII set - all 256 
+characters - on a full-screen canvas. You have 10 graphics characters 
+on your "palette" at one time, choosing one by striking a number key 
+- painting by numbers, as it were. Ordinary keyboard characters can 
+be typed in anytime. Access to the fine-line graphics makes possible 
+much more varied effects than the block graphics allow, such as 
+graphs that look like they're drawn on graph paper. Screens can be 
+chained together for presentation in a "slide-show" format with 
+various effects such as fade-in. Auxiliary programs will prepare 
+various types of graphs automatically from entered data. REMBRANDT 
+puts out good printed images, and reproduces half-intensity on paper 
+as well as on the screen, but as a printing program it is less 
+flexible than SCS-DRAW; nor is the overall presentation as attractive 
+and fast-moving. 
+
+DDRAW (non-commercial; available from many sources)
+
+     This pioneer program uses pixel drawing and keyboard characters 
+on a full-screen canvas. Features include automatic drawing of 
+circles, lines, and rectangles and filling of enclosed areas. All the 
+video effects are available; they are added to blocks after they have 
+been drawn. The cut-and-paste routine is limited to smallish areas 
+with no text, but you can store up to four details (called 
+subpictures) in memory to be shuffled about at will. An optional 
+status line keeps track of the cursor position and the drawing/ 
+erasing/moving status, and there is a separate screen giving a menu 
+of commands. Files can be saved in TYPEable format, something that is 
+not true of either of the commercial programs reviewed. DDRAW fully 
+supports the Gemini printer; my Panasonic (a machine similar to the 
+Epson) will print the graphics small but not text and graphics 
+combined.
+
+ARTIE (non-commercial; if all else fails, send me a postal money 
+order for $5 at the above address)
+
+     My own entry into the field. ARTIE uses the ASCII graphics, 
+including (on machines where they are TYPEable) some from the lower 
+range. Graphics can be chosen from a palette above the canvas or from 
+a separate menu. You can cover the canvas more quickly than with 
+DDRAW, but that program is better for detailed sketching. (DDRAW 
+files can be read into ARTIE screens, so it's possible to have the 
+best of both programs.) The canvas is only 20 lines but an auxiliary 
+program links two files to make a 24-line display. Details can be cut 
+and moved or written to file, then read back into the screen with 
+various video effects added. Rapid fill and empty functions; disk 
+logging and directory of relevant files; five help screens as well as 
+status-line reminders; a toggle for the keyboard clicker - ARTIE is 
+definitely built for comfort, which is why it weighs in at 50k or so 
+on disk. So far the Panasonic and Diablo/Juki printers are supported, 
+but the emphasis is on preparing screen displays.
+
+     By the way, the Juki printer that has been distributed with 
+many Kaypros is supported by SCS-DRAW and REMBRANDT as well as ARTIE. 
+The process may be painfully slow, noisy, and ribbon-consuming, but 
+your daisy-wheel printer CAN produce some very good graphics. 
+
+=====================================================================
+
+                              APPENDIX 
+
+         ESCAPE SEQUENCES, CONTROL CODES, AND PORT COMMANDS
+
+Cursor left                        ^H    ASCII 7 decimal
+Cursor right                       ^L         12
+Cursor down                        ^J         10
+Cursor up                          ^K         11
+Erase from cursor to end of screen ^W         23
+Erase from cursor to end of line   ^X         24
+Clear screen                       ^Z         26
+  (also cancels special effects)
+Home cursor                        ^^         30
+
+The following are all preceded by ESC, character #27:
+
+Insert line                        E     | contrary to  
+Delete line                        R     | manuals 
+Inverse video on/off               B0/C0
+Reduced intensity on/off           B1/C1
+Blinking on/off                    B2/C2
+Underlining on/off                 B3/C3
+Cursor visible/invisible           B4/C4
+Video mode on/off                  B5/C5   
+Remember/recover cursor position   B6/C6
+Status line preservation on/off    B7/C7
+Cursor address                     =, row + 32, col + 32
+
+Where row and col refer to the matrix of 100 by 160:
+
+Print pixel            *, row + 31, col + 31
+Erase pixel            #32 (space), row + 31, col + 31
+Print line             L, row1 + 31, col1 + 31, row2 + 31, col2 + 31
+Erase line             D, row1 + 31, col1 + 31, row2 + 31, col2 + 31
+
+The following two commands are shown in their MBASIC format:
+
+Stop cursor blinking     OUT 28, 10: OUT 29, 0
+Turn cursor to underline OUT 28, 10: OUT 29, 15* 
+                         (* or 79 or 111 for blink rate)
+
+In Pascal these commands would take the form port[28]:= 10; etc.
+
+=====================================================================
+
+                             POSTSCRIPT 
+
+I would like to offer my thanks to those who have shared their 
+knowledge of this somewhat obscure subject; I will not name them, 
+because the mistakes here are all my own. Corrections and additions 
+will be most welcome at the above address.
+
+=====================================================================
+
