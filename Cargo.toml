@@ -11,6 +11,11 @@ iz80 = "^0.3.5"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+minifb = { version = "0.28", optional = true }
+
+[features]
+default = []
+gui = ["minifb"]
 
 [target.'cfg(unix)'.dependencies]
 termios = "^0.3.3"

@@ -219,6 +219,16 @@ impl Config {
         }
     }
     
+    /// Get the character generator ROM path for this configuration
+    pub fn get_chargen_path(&self) -> &str {
+        match self.model {
+            KayproModel::KayproII => "roms/81-146a.rom",
+            KayproModel::Kaypro4_83 => "roms/81-146a.rom",
+            KayproModel::Kaypro10 => "roms/81-187.rom",
+            _ => "roms/81-235.rom", // 4/84, TurboROM, KayPLUS, Custom
+        }
+    }
+
     /// Get the video mode for this configuration
     pub fn get_video_mode(&self) -> VideoMode {
         match self.model {

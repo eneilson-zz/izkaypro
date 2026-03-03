@@ -1,5 +1,6 @@
 /target
 .DS_Store
+.vscode/
 AGENTS.md
 playground/
 libhard_disk.rlib

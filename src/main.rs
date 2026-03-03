@@ -16,6 +16,8 @@ mod rtc;
 mod sio;
 mod sy6545;
 mod diagnostics;
+#[cfg(feature = "gui")]
+mod renderer;
 #[cfg(test)]
 mod format_test;
 
@@ -130,6 +132,10 @@ struct Cli {
     /// Run without screen border (fits in 80x26 terminal)
     #[arg(long)]
     no_border: bool,
+
+    /// Launch graphical window (requires 'gui' feature)
+    #[arg(long)]
+    gui: bool,
 }
 
 fn main() {
@@ -352,6 +358,19 @@ fn main() {
             Ok(()) => println!("Serial port: {}", device),
             Err(e) => eprintln!("Warning: {}", e),
         }
+    }
+
+    // GUI mode: launch graphical window instead of terminal rendering
+    #[cfg(feature = "gui")]
+    if cli.gui {
+        println!("{}", welcome);
+        run_gui(&config, machine, cpu, trace_cpu, is_kaypro10_hardware, cli.speed);
+        return;
+    }
+    #[cfg(not(feature = "gui"))]
+    if cli.gui {
+        eprintln!("Error: --gui requires building with: cargo run --features gui");
+        std::process::exit(1);
     }
 
     // Start the cpu
@@ -667,6 +686,182 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn run_gui(
+    config: &Config,
+    mut machine: KayproMachine,
+    mut cpu: iz80::Cpu,
+    mut trace_cpu: bool,
+    _is_kaypro10_hardware: bool,
+    speed: Option<f64>,
+) {
+    use minifb::{Key, Window, WindowOptions, Scale};
+
+    let mut renderer = renderer::Renderer::new(config.get_chargen_path());
+
+    // Kaypro II/4-83: 640×192 native → double scanlines to 640×384 for CRT
+    // aspect ratio, then Scale::X2 → 1280×768. Other models: 640×400 × X2.
+    let scale = Scale::X2;
+
+    let (display_w, display_h) = renderer.display_size();
+    let mut window = Window::new(
+        &format!("izkaypro — {}", config.get_display_name()),
+        display_w,
+        display_h,
+        WindowOptions {
+            scale,
+            ..WindowOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Failed to create window: {}", e);
+        std::process::exit(1);
+    });
+
+    window.set_target_fps(60);
+
+    // Clock speed control
+    let clock_mhz: Option<f64> = speed.and_then(|mhz| {
+        if mhz < 0.0 { None }
+        else if mhz >= 1.0 && mhz <= 100.0 { Some((mhz * 2.0).round() / 2.0) }
+        else { None }
+    });
+    let mut cycle_count: u64 = 0;
+    let mut speed_start_time = Instant::now();
+    const CYCLES_PER_INSTRUCTION: u64 = 4;
+
+    let mut counter: u64 = 1;
+    let mut nmi_pending = false;
+    let mut nmi_deadline: u64 = 0;
+
+    // Run enough instructions per frame for responsive emulation.
+    // At unlimited speed, execute ~166K instructions per 60fps frame
+    // (~10M inst/sec, enough for Kaypro 10 to boot in ~1 second).
+    // With clock speed set, the throttling logic handles pacing.
+    let instructions_per_frame: u64 = 166_000;
+
+    // Disable keyboard idle sleep — minifb's set_target_fps handles pacing.
+    // Without this, is_key_pressed() sleeps 1ms per call after 50K idle polls,
+    // causing the inner CPU batch to take seconds instead of milliseconds.
+    machine.keyboard.idle_sleep_enabled = false;
+
+    while window.is_open() {
+        // Execute a batch of CPU instructions per frame
+        for _ in 0..instructions_per_frame {
+            cpu.execute_instruction(&mut machine);
+            counter += 1;
+            cycle_count += CYCLES_PER_INSTRUCTION;
+
+            // KayPLUS software clock fixup
+            if machine.kayplus_clock_fixup
+                && machine.is_rom_rank()
+                && cpu.registers().pc() == 0x069E
+            {
+                machine.patch_software_clock();
+                cpu.registers().set_pc(0x06CE);
+            }
+
+            // Clock speed throttling
+            if let Some(mhz) = clock_mhz {
+                let target_cycles_per_sec = (mhz * 1_000_000.0) as u64;
+                let elapsed = speed_start_time.elapsed();
+                let expected_cycles = (elapsed.as_secs_f64() * target_cycles_per_sec as f64) as u64;
+                if cycle_count > expected_cycles {
+                    let cycles_ahead = cycle_count - expected_cycles;
+                    let wait_secs = cycles_ahead as f64 / target_cycles_per_sec as f64;
+                    if wait_secs > 0.0001 {
+                        std::thread::sleep(Duration::from_secs_f64(wait_secs));
+                    }
+                }
+                if elapsed.as_secs() >= 1 {
+                    speed_start_time = Instant::now();
+                    cycle_count = 0;
+                }
+            }
+
+            // NMI processing
+            if machine.floppy_controller.raise_nmi {
+                machine.floppy_controller.raise_nmi = false;
+                nmi_pending = true;
+                nmi_deadline = counter + 10_000_000;
+            }
+            if nmi_pending && (cpu.is_halted()
+                || (counter >= nmi_deadline && machine.nmi_vector_is_safe()))
+            {
+                cpu.signal_nmi();
+                nmi_pending = false;
+            }
+
+            // SIO interrupt processing
+            if counter % 1024 == 0 {
+                let i_reg = cpu.registers().get8(iz80::Reg8::I);
+                if let Some(handler) = machine.sio_check_interrupt(i_reg) {
+                    let regs = cpu.registers();
+                    let pc = regs.pc();
+                    let mut sp = regs.get16(iz80::Reg16::SP);
+                    sp = sp.wrapping_sub(2);
+                    regs.set16(iz80::Reg16::SP, sp);
+                    machine.poke(sp, pc as u8);
+                    machine.poke(sp.wrapping_add(1), (pc >> 8) as u8);
+                    cpu.registers().set_pc(handler);
+                }
+            }
+        }
+
+        // Poll keyboard from terminal (Phase 1 — stdin still works)
+        machine.keyboard.consume_input();
+
+        // Handle emulator commands from keyboard
+        if !machine.keyboard.commands.is_empty() {
+            let commands = machine.keyboard.commands.clone();
+            for command in commands {
+                match command {
+                    Command::Quit => {
+                        machine.floppy_controller.media_selected().flush_disk();
+                        if let Some(ref mut hd) = machine.hard_disk {
+                            hd.flush();
+                        }
+                        return;
+                    },
+                    Command::TraceCPU => {
+                        trace_cpu = !trace_cpu;
+                        cpu.set_trace(trace_cpu);
+                    },
+                    _ => {} // Other commands (disk select, help, etc.) in Phase 2
+                }
+            }
+            machine.keyboard.commands.clear();
+        }
+
+        // Render frame
+        renderer.tick_frame();
+        let (dw, dh) = renderer.display_size();
+        let buffer = renderer.render_to_display_buffer(&machine);
+        window.update_with_buffer(buffer, dw, dh)
+            .unwrap_or_else(|e| eprintln!("Display error: {}", e));
+
+        // Check ESC after update_with_buffer (which pumps macOS events).
+        // Checking before would hang because the window never gets a
+        // final event pump to process the close.
+        if window.is_key_down(Key::Escape) {
+            break;
+        }
+
+        // Clear VRAM dirty flags
+        if machine.video_mode == kaypro_machine::VideoMode::Sy6545Crtc {
+            machine.crtc.vram_dirty = false;
+        } else {
+            machine.vram_dirty = false;
+        }
+    }
+
+    // Clean shutdown
+    machine.floppy_controller.media_selected().flush_disk();
+    if let Some(ref mut hd) = machine.hard_disk {
+        hd.flush();
     }
 }
 
