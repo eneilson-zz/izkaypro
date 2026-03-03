@@ -698,7 +698,7 @@ fn run_gui(
     _is_kaypro10_hardware: bool,
     speed: Option<f64>,
 ) {
-    use minifb::{Key, Window, WindowOptions, Scale};
+    use minifb::{Key, KeyRepeat, Window, WindowOptions, Scale};
 
     let mut renderer = renderer::Renderer::new(config.get_chargen_path());
 
@@ -743,10 +743,8 @@ fn run_gui(
     // With clock speed set, the throttling logic handles pacing.
     let instructions_per_frame: u64 = 166_000;
 
-    // Disable keyboard idle sleep — minifb's set_target_fps handles pacing.
-    // Without this, is_key_pressed() sleeps 1ms per call after 50K idle polls,
-    // causing the inner CPU batch to take seconds instead of milliseconds.
-    machine.keyboard.idle_sleep_enabled = false;
+    // GUI mode: keyboard input comes from minifb window, not stdin.
+    machine.keyboard.gui_mode = true;
 
     while window.is_open() {
         // Execute a batch of CPU instructions per frame
@@ -811,10 +809,93 @@ fn run_gui(
             }
         }
 
-        // Poll keyboard from terminal (Phase 1 — stdin still works)
+        // Render frame (update_with_buffer pumps macOS events, must come
+        // before key polling so get_keys_pressed returns current state).
+        renderer.tick_frame();
+        let (dw, dh) = renderer.display_size();
+        let buffer = renderer.render_to_display_buffer(&machine);
+        window.update_with_buffer(buffer, dw, dh)
+            .unwrap_or_else(|e| eprintln!("Display error: {}", e));
+
+        // Check ESC after update_with_buffer (which pumps macOS events).
+        if window.is_key_down(Key::Escape) {
+            break;
+        }
+
+        // Poll keyboard from minifb window
+        let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
+        let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
+
+        // Character keys (with auto-repeat)
+        for key in window.get_keys_pressed(KeyRepeat::Yes) {
+            let byte: Option<u8> = if let Some(base) = minifb_key_letter(key) {
+                if ctrl {
+                    Some(base + 1) // Ctrl+A=0x01 .. Ctrl+Z=0x1A
+                } else if shift {
+                    Some(base + b'A')
+                } else {
+                    Some(base + b'a')
+                }
+            } else if let Some(digit) = minifb_key_digit(key) {
+                if shift {
+                    Some(match digit {
+                        0 => b')', 1 => b'!', 2 => b'@', 3 => b'#',
+                        4 => b'$', 5 => b'%', 6 => b'^', 7 => b'&',
+                        8 => b'*', 9 => b'(', _ => unreachable!(),
+                    })
+                } else {
+                    Some(b'0' + digit)
+                }
+            } else {
+                match key {
+                    Key::Enter     => Some(0x0D),
+                    Key::Backspace => Some(0x08),
+                    Key::Tab       => Some(0x09),
+                    Key::Space     => Some(0x20),
+                    Key::Delete    => Some(0x7F),
+                    Key::Insert    => Some(0x0A),
+                    Key::Up        => Some(0xF1),
+                    Key::Down      => Some(0xF2),
+                    Key::Left      => Some(0xF3),
+                    Key::Right     => Some(0xF4),
+                    Key::Comma        => Some(if shift { b'<' } else { b',' }),
+                    Key::Period       => Some(if shift { b'>' } else { b'.' }),
+                    Key::Slash        => Some(if shift { b'?' } else { b'/' }),
+                    Key::Semicolon    => Some(if shift { b':' } else { b';' }),
+                    Key::Apostrophe   => Some(if shift { b'"' } else { b'\'' }),
+                    Key::LeftBracket  => Some(if shift { b'{' } else { b'[' }),
+                    Key::RightBracket => Some(if shift { b'}' } else { b']' }),
+                    Key::Backslash    => Some(if shift { b'|' } else { b'\\' }),
+                    Key::Minus        => Some(if shift { b'_' } else { b'-' }),
+                    Key::Equal        => Some(if shift { b'+' } else { b'=' }),
+                    Key::Backquote    => Some(if shift { b'~' } else { b'`' }),
+                    _ => None,
+                }
+            };
+            if let Some(b) = byte {
+                machine.keyboard.gui_key_queue.push(b);
+            }
+        }
+
+        // Command keys (no auto-repeat)
+        for key in window.get_keys_pressed(KeyRepeat::No) {
+            match key {
+                Key::F1 => machine.keyboard.gui_command_queue.push(Command::Help),
+                Key::F2 => machine.keyboard.gui_command_queue.push(Command::ShowStatus),
+                Key::F4 => machine.keyboard.gui_command_queue.push(Command::Quit),
+                Key::F5 => machine.keyboard.gui_command_queue.push(Command::SelectDiskA),
+                Key::F6 => machine.keyboard.gui_command_queue.push(Command::SelectDiskB),
+                Key::F7 => machine.keyboard.gui_command_queue.push(Command::SaveMemory),
+                Key::F8 => machine.keyboard.gui_command_queue.push(Command::TraceCPU),
+                Key::F9 => machine.keyboard.gui_command_queue.push(Command::SetSpeed),
+                _ => {}
+            }
+        }
+
+        // Drain GUI queues into internal buffers
         machine.keyboard.consume_input();
 
-        // Handle emulator commands from keyboard
+        // Handle emulator commands
         if !machine.keyboard.commands.is_empty() {
             let commands = machine.keyboard.commands.clone();
             for command in commands {
@@ -830,24 +911,10 @@ fn run_gui(
                         trace_cpu = !trace_cpu;
                         cpu.set_trace(trace_cpu);
                     },
-                    _ => {} // Other commands (disk select, help, etc.) in Phase 2
+                    _ => {}
                 }
             }
             machine.keyboard.commands.clear();
-        }
-
-        // Render frame
-        renderer.tick_frame();
-        let (dw, dh) = renderer.display_size();
-        let buffer = renderer.render_to_display_buffer(&machine);
-        window.update_with_buffer(buffer, dw, dh)
-            .unwrap_or_else(|e| eprintln!("Display error: {}", e));
-
-        // Check ESC after update_with_buffer (which pumps macOS events).
-        // Checking before would hang because the window never gets a
-        // final event pump to process the close.
-        if window.is_key_down(Key::Escape) {
-            break;
         }
 
         // Clear VRAM dirty flags
@@ -862,6 +929,33 @@ fn run_gui(
     machine.floppy_controller.media_selected().flush_disk();
     if let Some(ref mut hd) = machine.hard_disk {
         hd.flush();
+    }
+}
+
+#[cfg(feature = "gui")]
+fn minifb_key_letter(key: minifb::Key) -> Option<u8> {
+    use minifb::Key;
+    match key {
+        Key::A => Some(0), Key::B => Some(1), Key::C => Some(2), Key::D => Some(3),
+        Key::E => Some(4), Key::F => Some(5), Key::G => Some(6), Key::H => Some(7),
+        Key::I => Some(8), Key::J => Some(9), Key::K => Some(10), Key::L => Some(11),
+        Key::M => Some(12), Key::N => Some(13), Key::O => Some(14), Key::P => Some(15),
+        Key::Q => Some(16), Key::R => Some(17), Key::S => Some(18), Key::T => Some(19),
+        Key::U => Some(20), Key::V => Some(21), Key::W => Some(22), Key::X => Some(23),
+        Key::Y => Some(24), Key::Z => Some(25),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "gui")]
+fn minifb_key_digit(key: minifb::Key) -> Option<u8> {
+    use minifb::Key;
+    match key {
+        Key::Key0 => Some(0), Key::Key1 => Some(1), Key::Key2 => Some(2),
+        Key::Key3 => Some(3), Key::Key4 => Some(4), Key::Key5 => Some(5),
+        Key::Key6 => Some(6), Key::Key7 => Some(7), Key::Key8 => Some(8),
+        Key::Key9 => Some(9),
+        _ => None,
     }
 }
 

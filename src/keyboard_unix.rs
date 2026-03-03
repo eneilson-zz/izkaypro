@@ -24,6 +24,9 @@ pub struct Keyboard {
     pub commands: Vec<Command>,
     idle_polls: u32,          // Consecutive polls with no key available
     pub idle_sleep_enabled: bool, // false for headless/boot-test mode
+    pub gui_key_queue: Vec<u8>,
+    pub gui_command_queue: Vec<Command>,
+    pub gui_mode: bool,
 }
 
 impl Keyboard {
@@ -37,6 +40,9 @@ impl Keyboard {
             commands: Vec::<Command>::new(),
             idle_polls: 0,
             idle_sleep_enabled: true,
+            gui_key_queue: Vec::new(),
+            gui_command_queue: Vec::new(),
+            gui_mode: false,
         };
 
         c.setup_host_terminal(false);
@@ -56,14 +62,16 @@ impl Keyboard {
     pub fn is_key_pressed(&mut self) -> bool {
         self.consume_input();
         if self.key_buffer.is_empty() {
-            self.idle_polls = self.idle_polls.saturating_add(1);
-            if self.idle_sleep_enabled && self.idle_polls > 50_000 {
-                // Idle loop detected (e.g., CONIN polling with no input).
-                // Sleep 1ms to match real hardware polling rates and prevent
-                // ROM timeout counters from firing prematurely at unlimited speed.
-                thread::sleep(Duration::from_millis(1));
-            } else {
-                thread::sleep(Duration::from_nanos(100));
+            if !self.gui_mode {
+                self.idle_polls = self.idle_polls.saturating_add(1);
+                if self.idle_sleep_enabled && self.idle_polls > 50_000 {
+                    // Idle loop detected (e.g., CONIN polling with no input).
+                    // Sleep 1ms to match real hardware polling rates and prevent
+                    // ROM timeout counters from firing prematurely at unlimited speed.
+                    thread::sleep(Duration::from_millis(1));
+                } else {
+                    thread::sleep(Duration::from_nanos(100));
+                }
             }
             false
         } else {
@@ -125,6 +133,11 @@ impl Keyboard {
     }
 
     pub fn consume_input(&mut self) {
+        if self.gui_mode {
+            self.key_buffer.append(&mut self.gui_key_queue);
+            self.commands.append(&mut self.gui_command_queue);
+            return;
+        }
         let mut buf = [0;100];
         let size = stdin().read(&mut buf).unwrap_or(0);
         if size > 0 {
