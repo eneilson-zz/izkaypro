@@ -9,9 +9,9 @@ This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's wo
 
 
 ## Update 3/2026
-**Chargen GUI Rendering**
+**Authentic rendering using the CHARGEN ROMs**
 
-Kaypro screen rendering using character generator ROMs is now available. Launch with `--chargen` to open a native window that renders the emulated display using the actual Kaypro chargen ROM, with proper scanline doubling for CRT-like aspect ratio on 8-row models. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Chargen support is included in the default build.
+Kaypro screen rendering using the original character generator ROMs is now available. Launch with `--chargen` to open a native window that renders any of the emulated machines using the actual Kaypro chargen ROM, with proper scanline doubling for CRT-like aspect ratio on 8-row models. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Chargen support is included in the default build.
 
 Phosphor color options are available via `--phosphor`:
 - `green` (default) — P1 green phosphor: fg=#33FF33, bg=#002200, dim=#1A801A
@@ -150,7 +150,15 @@ Press F1 to get additional help:
 
 ## Build from source
 
-To build from source, install the latest Rust compiler, clone the repo and run `cargo build --release`. To build and run directly execute `cargo run`.
+To build from source, install Rust 1.87 or later, clone the repo and run `cargo build --release`. To build and run directly execute `cargo run`.
+
+### Linux build dependencies
+
+On Ubuntu/Debian, install the following packages before building:
+
+```
+sudo apt install libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
+```
 
 ## Kaypro 10 support added
 Kaypro 10 support with the 2.2u1 BIOS and 10MB hard disk is now available.  Drives A and B are 5MB hard disk partitions and Drive C is the floppy drive.

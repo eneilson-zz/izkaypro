@@ -753,6 +753,7 @@ fn run_gui(
         display_h,
         WindowOptions {
             scale,
+            resize: true,
             ..WindowOptions::default()
         },
     )
@@ -760,6 +761,32 @@ fn run_gui(
         eprintln!("Failed to create window: {}", e);
         std::process::exit(1);
     });
+
+    // minifb omits NSWindowStyleMaskMiniaturizable on macOS, so the yellow
+    // minimize traffic-light is grayed out. Patch it via Objective-C runtime.
+    // On Windows/Linux the minimize button is already present natively.
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+        extern "C" {
+            fn objc_msgSend();
+            fn sel_registerName(name: *const u8) -> *mut c_void;
+        }
+        unsafe {
+            // Typed function pointers for ARM64 ABI (variadic decl is wrong on aarch64)
+            let get_mask: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u64 =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let set_mask: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+            let nswindow = window.get_window_handle();
+            let style_sel = sel_registerName(b"styleMask\0".as_ptr());
+            let set_sel = sel_registerName(b"setStyleMask:\0".as_ptr());
+            let current = get_mask(nswindow, style_sel);
+            const NS_MINIATURIZABLE: u64 = 1 << 2;
+            set_mask(nswindow, set_sel, current | NS_MINIATURIZABLE);
+        }
+    }
 
     window.set_target_fps(60);
 
@@ -806,8 +833,29 @@ fn run_gui(
             instructions_per_frame
         };
 
+        // When idle polling exceeds the threshold (same 50K as terminal mode),
+        // reduce the batch to match ~4 MHz execution speed (~67K cycles/frame
+        // at 60fps = ~17K instructions). This prevents TurboROM's software
+        // timeout counter from firing prematurely at unlimited speed, while
+        // maintaining full speed during real work. idle_polls resets to 0
+        // automatically in is_key_pressed() when a key is available.
+        let effective_batch = if machine.keyboard.idle_polls > 50_000 {
+            batch.min(17_000)
+        } else {
+            batch
+        };
+
         // Execute a batch of CPU instructions per frame
-        for _ in 0..batch {
+        for i in 0..effective_batch {
+            // Simulate CRTC vertical retrace timing within the batch.
+            // TurboROM has a two-phase VRT wait: first wait for VRT=0 (retrace
+            // end), then wait for VRT=1 (retrace start). We pulse VRT high for
+            // the last ~10% of the batch, matching real CRT timing where retrace
+            // occupies ~10% of each frame period.
+            let vrt = i >= batch * 9 / 10;
+            if vrt != machine.crtc.vertical_retrace {
+                machine.crtc.set_vertical_retrace(vrt);
+            }
             cpu.execute_instruction(&mut machine);
             counter += 1;
             cycle_count += CYCLES_PER_INSTRUCTION;
@@ -921,7 +969,7 @@ fn run_gui(
         window.update_with_buffer(buffer, dw, dh)
             .unwrap_or_else(|e| eprintln!("Display error: {}", e));
 
-        // ESC: dismiss overlays/input first, only exit when nothing is showing.
+        // ESC: dismiss overlays/input first, otherwise send ESC to CP/M.
         if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
             if speed_input.is_some() {
                 speed_input = None;
@@ -929,7 +977,7 @@ fn run_gui(
                 show_help = false;
                 show_status = false;
             } else {
-                break;
+                machine.keyboard.gui_key_queue.push(0x1b);
             }
         }
 
@@ -1083,19 +1131,26 @@ fn run_gui(
                             .pick_file()
                         {
                             let path_str = path.to_string_lossy();
-                            if let Err(err) = machine.floppy_controller.media_a_mut().load_disk(&path_str) {
-                                eprintln!("Error loading disk: {}", err);
-                            } else {
-                                machine.floppy_controller.disk_in_drive = true;
-                                machine.floppy_controller.motor_on = true;
-                                if _is_kaypro10_hardware {
-                                    let format = machine.floppy_controller.media_a().format;
-                                    let type_byte = match format {
-                                        media::MediaFormat::DsDd => 0x09,
-                                        media::MediaFormat::SsDd => 0x05,
-                                        _ => 0x01,
-                                    };
-                                    machine.poke(0xFFF6, type_byte);
+                            match machine.floppy_controller.media_a_mut().load_disk(&path_str) {
+                                Ok(_) => {
+                                    machine.floppy_controller.disk_in_drive = true;
+                                    machine.floppy_controller.motor_on = true;
+                                    if _is_kaypro10_hardware {
+                                        let format = machine.floppy_controller.media_a().format;
+                                        let type_byte = match format {
+                                            media::MediaFormat::DsDd => 0x09,
+                                            media::MediaFormat::SsDd => 0x05,
+                                            _ => 0x01,
+                                        };
+                                        machine.poke(0xFFF6, type_byte);
+                                    }
+                                    let name = path.file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| path_str.to_string());
+                                    window.set_title(&format!("izkaypro — {} — {}: {}", config.get_display_name(), la, name));
+                                }
+                                Err(err) => {
+                                    window.set_title(&format!("izkaypro — {} — Error: {}", config.get_display_name(), err));
                                 }
                             }
                         }
@@ -1109,8 +1164,16 @@ fn run_gui(
                             .pick_file()
                         {
                             let path_str = path.to_string_lossy();
-                            if let Err(err) = machine.floppy_controller.media_b_mut().load_disk(&path_str) {
-                                eprintln!("Error loading disk: {}", err);
+                            match machine.floppy_controller.media_b_mut().load_disk(&path_str) {
+                                Ok(_) => {
+                                    let name = path.file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| path_str.to_string());
+                                    window.set_title(&format!("izkaypro — {} — {}: {}", config.get_display_name(), lb, name));
+                                }
+                                Err(err) => {
+                                    window.set_title(&format!("izkaypro — {} — Error: {}", config.get_display_name(), err));
+                                }
                             }
                         }
                     },

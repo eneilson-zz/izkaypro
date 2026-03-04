@@ -38,7 +38,7 @@ pub struct Sy6545 {
     
     // Status register bits
     update_ready: bool,      // SR7: UR - Update Ready
-    vertical_retrace: bool,  // SR5: VRT - Vertical Retrace
+    pub vertical_retrace: bool,  // SR5: VRT - Vertical Retrace
     
     // Frame counter for VRT timing simulation
     cycle_counter: u32,
@@ -69,6 +69,12 @@ impl Sy6545 {
         }
     }
     
+    /// Set the vertical retrace flag. Called once per GUI frame to pulse
+    /// VRT so ROM code waiting on port 0x1C bit 5 can proceed.
+    pub fn set_vertical_retrace(&mut self, vrt: bool) {
+        self.vertical_retrace = vrt;
+    }
+
     /// Advance timing by one CPU cycle (for VRT simulation)
     /// Call this periodically to simulate vertical retrace timing
     #[allow(dead_code)]

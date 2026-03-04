@@ -22,7 +22,7 @@ pub struct Keyboard {
     initial_termios: Option<Termios>,
     key_buffer: Vec<u8>,  // Buffer for queued keys
     pub commands: Vec<Command>,
-    idle_polls: u32,          // Consecutive polls with no key available
+    pub idle_polls: u32,      // Consecutive polls with no key available
     pub idle_sleep_enabled: bool, // false for headless/boot-test mode
     pub gui_key_queue: Vec<u8>,
     pub gui_command_queue: Vec<Command>,
@@ -62,8 +62,8 @@ impl Keyboard {
     pub fn is_key_pressed(&mut self) -> bool {
         self.consume_input();
         if self.key_buffer.is_empty() {
+            self.idle_polls = self.idle_polls.saturating_add(1);
             if !self.gui_mode {
-                self.idle_polls = self.idle_polls.saturating_add(1);
                 if self.idle_sleep_enabled && self.idle_polls > 50_000 {
                     // Idle loop detected (e.g., CONIN polling with no input).
                     // Sleep 1ms to match real hardware polling rates and prevent

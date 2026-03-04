@@ -11,7 +11,7 @@ iz80 = "^0.3.5"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
-minifb = { version = "0.28", optional = true }
+minifb = { version = "0.28", optional = true, default-features = false, features = ["x11"] }
 rfd = { version = "0.15", optional = true }
 
 [features]
