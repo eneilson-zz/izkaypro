@@ -16,15 +16,19 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz
+            features: "--no-default-features"
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
+            features: ""
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
+            features: ""
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
+            features: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -34,14 +38,12 @@ jobs:
       - name: Install Rust toolchain
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install Linux build dependencies
+      - name: Install musl tools (Linux)
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
