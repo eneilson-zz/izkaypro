@@ -259,9 +259,12 @@ fn main() {
 
     machine.kayplus_clock_fixup = config.model == KayproModel::KayPlus84;
 
-    // Advent board HD systems map floppies to C/D instead of A/B
-    let advent_board = has_hard_disk && !is_kaypro10_hardware;
-    if advent_board {
+    // HD systems map floppies differently than floppy-only models:
+    // Kaypro 10: single floppy is Drive C
+    // Advent board (TurboROM+HD, Ultimate): floppies are C and D
+    if is_kaypro10_hardware {
+        screen.floppy_drive_labels = ('C', 'C');
+    } else if has_hard_disk {
         screen.floppy_drive_labels = ('C', 'D');
     }
 
@@ -818,6 +821,9 @@ fn run_gui(
     let mut speed_input: Option<String> = None; // Some = F9 input mode active
     let mut clock_mhz = clock_mhz; // make mutable for speed changes
 
+    let mut prev_f5_down = false;
+    let mut prev_f6_down = false;
+
     while window.is_open() {
         // Compute instructions per frame based on clock speed.
         // At a fixed MHz, execute exactly enough cycles for one 60fps frame.
@@ -1085,13 +1091,28 @@ fn run_gui(
                     Key::F1 => machine.keyboard.gui_command_queue.push(Command::Help),
                     Key::F2 => machine.keyboard.gui_command_queue.push(Command::ShowStatus),
                     Key::F4 => machine.keyboard.gui_command_queue.push(Command::Quit),
-                    Key::F5 => machine.keyboard.gui_command_queue.push(Command::SelectDiskA),
-                    Key::F6 => machine.keyboard.gui_command_queue.push(Command::SelectDiskB),
                     Key::F7 => machine.keyboard.gui_command_queue.push(Command::SaveMemory),
                     Key::F8 => machine.keyboard.gui_command_queue.push(Command::TraceCPU),
                     Key::F9 => machine.keyboard.gui_command_queue.push(Command::SetSpeed),
                     _ => {}
                 }
+            }
+
+            // F5/F6: detect press, but defer the command until the key is
+            // released. This ensures minifb sees the key-up event BEFORE the
+            // rfd modal dialog opens (which swallows it on macOS, creating a
+            // phantom key-down that corrupts subsequent edge detection).
+            if window.is_key_down(Key::F5) {
+                prev_f5_down = true;
+            } else if prev_f5_down {
+                prev_f5_down = false;
+                machine.keyboard.gui_command_queue.push(Command::SelectDiskA);
+            }
+            if window.is_key_down(Key::F6) {
+                prev_f6_down = true;
+            } else if prev_f6_down {
+                prev_f6_down = false;
+                machine.keyboard.gui_command_queue.push(Command::SelectDiskB);
             }
         }
 
@@ -1156,23 +1177,27 @@ fn run_gui(
                         }
                     },
                     Command::SelectDiskB => {
-                        let (_, lb) = floppy_drive_labels;
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_title(&format!("Select disk image for Drive {}", lb))
-                            .add_filter("Disk Images", &["dsk", "img", "cpm", "raw"])
-                            .add_filter("All Files", &["*"])
-                            .pick_file()
-                        {
-                            let path_str = path.to_string_lossy();
-                            match machine.floppy_controller.media_b_mut().load_disk(&path_str) {
-                                Ok(_) => {
-                                    let name = path.file_name()
-                                        .map(|n| n.to_string_lossy().to_string())
-                                        .unwrap_or_else(|| path_str.to_string());
-                                    window.set_title(&format!("izkaypro — {} — {}: {}", config.get_display_name(), lb, name));
-                                }
-                                Err(err) => {
-                                    window.set_title(&format!("izkaypro — {} — Error: {}", config.get_display_name(), err));
+                        if _is_kaypro10_hardware {
+                            window.set_title(&format!("izkaypro — {} — Kaypro 10 has only one floppy drive (C:)", config.get_display_name()));
+                        } else {
+                            let (_, lb) = floppy_drive_labels;
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title(&format!("Select disk image for Drive {}", lb))
+                                .add_filter("Disk Images", &["dsk", "img", "cpm", "raw"])
+                                .add_filter("All Files", &["*"])
+                                .pick_file()
+                            {
+                                let path_str = path.to_string_lossy();
+                                match machine.floppy_controller.media_b_mut().load_disk(&path_str) {
+                                    Ok(_) => {
+                                        let name = path.file_name()
+                                            .map(|n| n.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| path_str.to_string());
+                                        window.set_title(&format!("izkaypro — {} — {}: {}", config.get_display_name(), lb, name));
+                                    }
+                                    Err(err) => {
+                                        window.set_title(&format!("izkaypro — {} — Error: {}", config.get_display_name(), err));
+                                    }
                                 }
                             }
                         }

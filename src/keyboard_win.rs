@@ -58,8 +58,8 @@ impl Keyboard {
         self.consume_input();
         if self.key_buffer.is_empty() {
             self.idle_polls = self.idle_polls.saturating_add(1);
-            if !self.gui_mode {
-                if self.idle_sleep_enabled && self.idle_polls > 50_000 {
+            if !self.gui_mode && self.idle_sleep_enabled {
+                if self.idle_polls > 50_000 {
                     // Idle loop detected (e.g., CONIN polling with no input).
                     // Sleep 1ms to match real hardware polling rates and prevent
                     // ROM timeout counters from firing prematurely at unlimited speed.
