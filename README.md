@@ -9,9 +9,9 @@ This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's wo
 
 
 ## Update 3/2026
-**Authentic rendering using the CHARGEN ROMs**
+**Authentic rendering using the CHARGEN ROMs and phosphor display**
 
-Kaypro screen rendering using the original character generator ROMs is now available. Launch with `--chargen` to open a native window that renders any of the emulated machines using the actual Kaypro chargen ROM, with proper scanline doubling for CRT-like aspect ratio on 8-row models. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Chargen support is included in the default build.
+Kaypro screen rendering using the original character generator ROMs is now available. Launch with `--chargen` to open a native window that renders any of the emulated machines using the actual Kaypro chargen ROM. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Chargen support is included in the default build.
 
 Phosphor color options are available via `--phosphor`:
 - `green` (default) — P1 green phosphor: fg=#33FF33, bg=#002200, dim=#1A801A
@@ -26,6 +26,7 @@ Individual colors can be overridden with `--phosphor-fg`, `--phosphor-bg`, and `
 ./izkaypro --chargen --phosphor-fg "#FF6600" --phosphor-bg "#110500" --phosphor-dim "#803300"
 ./izkaypro --chargen --phosphor white --phosphor-dim "#909090"
 ```
+![Kaypro with Chargen ROM Support and Phosphor Screen](doc/Kaypro4-Chargen.jpg)
 
 ## Update 2/2026
 **The Ulimate Kaypro**
