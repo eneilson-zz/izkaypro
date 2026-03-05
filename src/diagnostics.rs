@@ -600,12 +600,17 @@ pub fn run_boot_tests() -> Vec<TestResult> {
 
 fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
     use iz80::*;
+    use crate::config::resolve_path;
+
+    let disk_a = resolve_path(cfg.disk_a);
+    let disk_b = resolve_path(cfg.disk_b);
+    let rom_path = resolve_path(cfg.rom_path);
 
     let fdc = crate::floppy_controller::FloppyController::new(
-        cfg.disk_a, cfg.disk_b, cfg.disk_format, cfg.side1_sector_base, false, false,
+        &disk_a, &disk_b, cfg.disk_format, cfg.side1_sector_base, false, false,
     );
     let mut machine = crate::kaypro_machine::KayproMachine::new(
-        cfg.rom_path, cfg.video_mode, fdc, cfg.has_hard_disk,
+        &rom_path, cfg.video_mode, fdc, cfg.has_hard_disk,
         cfg.is_kaypro10_hardware,
         false, false, false, false, false, false,
     );
@@ -620,9 +625,10 @@ fn run_single_boot_test(cfg: &BootTestConfig) -> TestResult {
 
     // Load HD image if specified (copy to temp file to avoid modifying original)
     let hd_tmp_path: Option<std::path::PathBuf> = if let Some(hd_src) = cfg.hd_image {
+        let hd_src_resolved = resolve_path(hd_src);
         let tmp = std::env::temp_dir()
             .join(format!("izkaypro_boot_test_{}.hd", std::process::id()));
-        if let Err(e) = std::fs::copy(hd_src, &tmp) {
+        if let Err(e) = std::fs::copy(&hd_src_resolved, &tmp) {
             return TestResult {
                 name: format!("Boot {}", cfg.name),
                 passed: false,

@@ -21,7 +21,7 @@ mod renderer;
 #[cfg(test)]
 mod format_test;
 
-use self::config::{Config, KayproModel};
+use self::config::{Config, KayproModel, resolve_path};
 use self::kaypro_machine::KayproMachine;
 use self::floppy_controller::FloppyController;
 use self::screen::Screen;
@@ -176,16 +176,16 @@ fn main() {
         || config.model == KayproModel::TurboRomHd
         || config.model == KayproModel::Ultimate;
     let disk_a_path = if hd_boot {
-        config.disk_a.clone().unwrap_or_default()
+        config.disk_a.as_deref().map(resolve_path).unwrap_or_default()
     } else {
-        config.disk_a.clone()
-            .unwrap_or_else(|| config.get_default_disk_a().to_string())
+        resolve_path(config.disk_a.as_deref()
+            .unwrap_or(config.get_default_disk_a()))
     };
     let disk_b_path = if hd_boot {
-        config.disk_b.clone().unwrap_or_default()
+        config.disk_b.as_deref().map(resolve_path).unwrap_or_default()
     } else {
-        config.disk_b.clone()
-            .unwrap_or_else(|| config.get_default_disk_b().to_string())
+        resolve_path(config.disk_b.as_deref()
+            .unwrap_or(config.get_default_disk_b()))
     };
 
     let has_trace_log = cli.trace_log.is_some();
@@ -239,7 +239,7 @@ fn main() {
     );
     let mut screen = Screen::new(!any_trace, config.get_display_name(), cli.no_border);
     let mut machine = KayproMachine::new(
-        config.get_rom_path(),
+        &resolve_path(config.get_rom_path()),
         config.get_video_mode(),
         floppy_controller,
         has_hard_disk,
@@ -279,9 +279,9 @@ fn main() {
     // Load hard disk image: use --hd path if specified, otherwise use model defaults.
     let hd_path = cli.hd.clone().or_else(|| {
         match config.model {
-            KayproModel::Kaypro10 => Some("disks/system/kaypro10.hd".to_string()),
-            KayproModel::TurboRomHd => Some("disks/system/turborom.hd".to_string()),
-            KayproModel::Ultimate => Some("disks/system/turborom_nz.hd".to_string()),
+            KayproModel::Kaypro10 => Some(resolve_path("disks/system/kaypro10.hd")),
+            KayproModel::TurboRomHd => Some(resolve_path("disks/system/turborom.hd")),
+            KayproModel::Ultimate => Some(resolve_path("disks/system/turborom_nz.hd")),
             _ => None,
         }
     });
@@ -743,7 +743,7 @@ fn run_gui(
 ) {
     use minifb::{Key, KeyRepeat, Window, WindowOptions, Scale};
 
-    let mut renderer = renderer::Renderer::new(config.get_chargen_path(), phosphor);
+    let mut renderer = renderer::Renderer::new(&resolve_path(config.get_chargen_path()), phosphor);
 
     // Kaypro II/4-83: 640×192 native → double scanlines to 640×384 for CRT
     // aspect ratio, then Scale::X2 → 1280×768. Other models: 640×400 × X2.

@@ -8,6 +8,27 @@ use crate::media::MediaFormat;
 /// Configuration file name
 const CONFIG_FILE: &str = "izkaypro.toml";
 
+/// Resolve a relative path for ROMs, disks, and config files.
+/// Tries the executable's directory first (for installed/release layouts),
+/// then falls back to the current working directory (for `cargo run` during
+/// development). Absolute paths are returned unchanged.
+pub fn resolve_path(relative: &str) -> String {
+    if relative.is_empty() || Path::new(relative).is_absolute() {
+        return relative.to_string();
+    }
+    // Try next to the executable first
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(relative);
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Fall back to current working directory (relative path as-is)
+    relative.to_string()
+}
+
 /// Kaypro model presets
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 pub enum KayproModel {
@@ -141,7 +162,7 @@ impl Default for Config {
 impl Config {
     /// Load configuration from file, or return default if file doesn't exist
     pub fn load() -> Self {
-        Self::load_from_path(CONFIG_FILE)
+        Self::load_from_path(&resolve_path(CONFIG_FILE))
     }
     
     /// Load configuration from a specific path
