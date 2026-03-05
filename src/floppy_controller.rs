@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use super::media::{self, *};
@@ -45,7 +46,7 @@ pub struct FloppyController {
     pub read_index: usize,
     pub read_last: usize,
 
-    data_buffer: Vec<u8>,
+    data_buffer: VecDeque<u8>,
 
     // WRITE TRACK state
     pub write_track_active: bool,
@@ -173,7 +174,7 @@ impl FloppyController {
             read_index: 0,
             read_last: 0,
 
-            data_buffer: Vec::new(),
+            data_buffer: VecDeque::new(),
 
             write_track_active: false,
             write_track_buffer: Vec::new(),
@@ -494,12 +495,12 @@ impl FloppyController {
                 // into the sector register so that a comparison can be made by the user."
                 self.sector = self.head_position;
                 self.data_buffer.clear();
-                self.data_buffer.push(self.head_position);
-                self.data_buffer.push(side_2 as u8);
-                self.data_buffer.push(sector_id);
-                self.data_buffer.push(2);
-                self.data_buffer.push(0xde);
-                self.data_buffer.push(0xad);
+                self.data_buffer.push_back(self.head_position);
+                self.data_buffer.push_back(side_2 as u8);
+                self.data_buffer.push_back(sector_id);
+                self.data_buffer.push_back(2);
+                self.data_buffer.push_back(0xde);
+                self.data_buffer.push_back(0xad);
                 // Set BUSY - the real WD1793 stays busy while scanning for the
                 // next sector ID. BUSY clears after the ID field is read.
                 // We use a countdown decremented on status reads so that
@@ -754,8 +755,7 @@ impl FloppyController {
     pub fn get_data(&mut self) -> u8 {
         self.status_polls_without_data = 0;
         if !self.data_buffer.is_empty() {
-            self.data = self.data_buffer[0];
-            self.data_buffer.remove(0);
+            self.data = self.data_buffer.pop_front().unwrap_or_default();
             self.raise_nmi = true;
         } else if self.read_index < self.read_last {
             // Prepare next byte

@@ -321,6 +321,16 @@ impl Config {
             KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/blank_disks/cpm22-kaypro4-blank.img"),
         }
     }
+
+    /// Get the default hard disk image path for this configuration, if applicable
+    pub fn get_default_hd_path(&self) -> Option<&'static str> {
+        match self.model {
+            KayproModel::Kaypro10   => Some("disks/system/kaypro10.hd"),
+            KayproModel::TurboRomHd => Some("disks/system/turborom.hd"),
+            KayproModel::Ultimate   => Some("disks/system/turborom_nz.hd"),
+            _                       => None,
+        }
+    }
     
     /// Get a description of this configuration
     pub fn get_description(&self) -> String {

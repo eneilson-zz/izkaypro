@@ -277,14 +277,8 @@ fn main() {
     }
 
     // Load hard disk image: use --hd path if specified, otherwise use model defaults.
-    let hd_path = cli.hd.clone().or_else(|| {
-        match config.model {
-            KayproModel::Kaypro10 => Some(resolve_path("disks/system/kaypro10.hd")),
-            KayproModel::TurboRomHd => Some(resolve_path("disks/system/turborom.hd")),
-            KayproModel::Ultimate => Some(resolve_path("disks/system/turborom_nz.hd")),
-            _ => None,
-        }
-    });
+    let hd_path = cli.hd.clone()
+        .or_else(|| config.get_default_hd_path().map(|s| resolve_path(s)));
     if let Some(ref hd_path) = hd_path {
         if let Some(ref mut hd) = machine.hard_disk {
             match hd.load_image(hd_path) {
@@ -490,7 +484,7 @@ fn main() {
         }
 
         if !machine.keyboard.commands.is_empty() {
-            let commands = machine.keyboard.commands.clone();
+            let commands = std::mem::take(&mut machine.keyboard.commands);
             for command in commands {
                 match command {
                     Command::Quit => {
@@ -589,7 +583,6 @@ fn main() {
                 }
             }
             screen.update(&mut machine, true);
-            machine.keyboard.commands.clear();
         }
 
         // SIO interrupt processing (keyboard)
@@ -1121,7 +1114,7 @@ fn run_gui(
 
         // Handle emulator commands
         if !machine.keyboard.commands.is_empty() {
-            let commands = machine.keyboard.commands.clone();
+            let commands = std::mem::take(&mut machine.keyboard.commands);
             for command in commands {
                 match command {
                     Command::Quit => {
@@ -1217,7 +1210,6 @@ fn run_gui(
                     },
                 }
             }
-            machine.keyboard.commands.clear();
         }
 
         // Clear VRAM dirty flags

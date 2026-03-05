@@ -88,7 +88,10 @@ impl Renderer {
     /// Load character generator ROM and auto-detect 2KB (8-row) vs 4KB (16-row).
     pub fn new(chargen_path: &str, phosphor: PhosphorColors) -> Renderer {
         let chargen = fs::read(chargen_path)
-            .unwrap_or_else(|e| panic!("Failed to load character ROM '{}': {}", chargen_path, e));
+            .unwrap_or_else(|e| {
+                eprintln!("Error: Failed to load character ROM '{}': {}", chargen_path, e);
+                std::process::exit(1);
+            });
 
         let is_2k = chargen.len() <= 2048;
         let scanlines_per_char = if is_2k { 8 } else { 16 };

@@ -216,8 +216,14 @@ impl Media {
         }
 
         if let Some(ref mut file) = self.file {
-            file.seek(SeekFrom::Start(self.write_min as u64)).unwrap();
-            file.write_all(&self.content[self.write_min..=self.write_max]).unwrap();
+            if let Err(e) = file.seek(SeekFrom::Start(self.write_min as u64)) {
+                eprintln!("Warning: Failed to seek disk '{}': {}", self.name, e);
+                return;
+            }
+            if let Err(e) = file.write_all(&self.content[self.write_min..=self.write_max]) {
+                eprintln!("Warning: Failed to write disk '{}': {}", self.name, e);
+                return;
+            }
         }
 
         self.write_max = 0;

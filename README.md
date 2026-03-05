@@ -4,7 +4,7 @@
 
 ## What is this?
 This is a Kaypro emulator that runs either in a terminal window on Linux, OSX, FreeBSD, and Windows or natively rendered through using the original Kaypro chargen ROMs.  The emulator supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM and KayPLUS ROM variants.  The emulator also supports SSDD and DSDD disk images where ROM-appropriaate.  
-- For best display results in term, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
+- For best display results in terminal-only mode, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
 - For the best native Kaypro experience, add the --chargen parameter and the emulator will render a Kaypro-native display, including graphics capability. You will lose copy/paste functionality in this mode.
 
 This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
@@ -40,7 +40,7 @@ A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `
 
 Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  The CP/M replacement NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/time stamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model ultimate --chargen` (--chargen is optional).  Once booted, type `nzcom`.  You will see the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
 
-One of the reasons the TurboROM Kaypro was so cool is that it allowed you to attach a hard drive yet still maintain a TPA size of 62.5k (about 8k better than what you can get with the standard Kaypro 10 HD BIOS).  I also filled the turborom_nz.hd image (the image used with the ulimate Kaypro model) with useful applications and utilities. You can check these out in the different user directories
+One of the reasons the TurboROM-enabled Kaypro was so cool is that it allowed you to attach a hard drive yet still maintain a TPA size of 62.5k (about 8k better than what you can get with the standard Kaypro 10 HD BIOS).  I also filled the turborom_nz.hd image (the image used with the ulimate Kaypro model) with useful applications and utilities. You can check these out in the different user directories
 
 **Welcome to peak 80's CP/M computing!**
 
