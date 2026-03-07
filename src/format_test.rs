@@ -91,6 +91,7 @@ mod tests {
 
         fdc.media_b_mut().content = blank;
         fdc.media_b_mut().format = format;
+        fdc.media_b_mut().geometry = None;
         fdc.media_b_mut().learned_n = None;
         fdc.media_b_mut().learned_sector_base = None;
         fdc.media_b_mut().track_geometry.clear();
@@ -409,6 +410,7 @@ mod tests {
 
         fdc.media_b_mut().content = blank;
         fdc.media_b_mut().format = format;
+        fdc.media_b_mut().geometry = None;
         fdc.media_b_mut().learned_n = None;
         fdc.media_b_mut().learned_sector_base = None;
         fdc.media_b_mut().track_geometry.clear();
@@ -527,6 +529,7 @@ mod tests {
         // Load SSDD image in drive B
         fdc.media_b_mut().content = ssdd_image;
         fdc.media_b_mut().format = MediaFormat::SsDd;
+        fdc.media_b_mut().geometry = None;
         fdc.media_b_mut().learned_n = None;
         fdc.media_b_mut().learned_sector_base = None;
         fdc.media_b_mut().track_geometry.clear();

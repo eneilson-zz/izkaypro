@@ -130,6 +130,44 @@ impl FloppyController {
             f => f,
         };
 
+        let mut media_a = Media {
+            file: disk_a_file,
+            name: disk_a_name,
+            content: disk_a_content,
+            format: format_a,
+            geometry: None,
+            write_protected: disk_a_wp,
+            side1_sector_base,
+            learned_n: None,
+            learned_sector_base: None,
+            track_geometry: std::collections::HashMap::new(),
+            write_min: usize::MAX,
+            write_max: 0,
+        };
+        let mut media_b = Media {
+            file: disk_b_file,
+            name: disk_b_name,
+            content: disk_b_content,
+            format: format_b,
+            geometry: None,
+            write_protected: disk_b_wp,
+            side1_sector_base,
+            learned_n: None,
+            learned_sector_base: None,
+            track_geometry: std::collections::HashMap::new(),
+            write_min: usize::MAX,
+            write_max: 0,
+        };
+
+        // Apply detected geometry to pre-populate track_geometry so READ ADDRESS
+        // returns the correct N immediately (no WRITE TRACK pass required).
+        if let Some(geom) = media::auto_detect_geometry(&media_a.content, side1_sector_base) {
+            media_a.apply_geometry(geom);
+        }
+        if let Some(geom) = media::auto_detect_geometry(&media_b.content, side1_sector_base) {
+            media_b.apply_geometry(geom);
+        }
+
         FloppyController {
             motor_on: false,
             disk_in_drive: true,
@@ -142,34 +180,7 @@ impl FloppyController {
             single_density: false,
             data: 0,
             status: 0,
-            media: [
-                Media {
-                    file: disk_a_file,
-                    name: disk_a_name,
-                    content: disk_a_content,
-                    format: format_a,
-                    write_protected: disk_a_wp,
-                    side1_sector_base,
-                    learned_n: None,
-                    learned_sector_base: None,
-                    track_geometry: std::collections::HashMap::new(),
-                    write_min: usize::MAX,
-                    write_max: 0,
-                },
-                Media {
-                    file: disk_b_file,
-                    name: disk_b_name,
-                    content: disk_b_content,
-                    format: format_b,
-                    write_protected: disk_b_wp,
-                    side1_sector_base,
-                    learned_n: None,
-                    learned_sector_base: None,
-                    track_geometry: std::collections::HashMap::new(),
-                    write_min: usize::MAX,
-                    write_max: 0,
-                },
-            ],
+            media: [media_a, media_b],
 
             read_index: 0,
             read_last: 0,
@@ -389,6 +400,13 @@ impl FloppyController {
         } else if (command & 0xe0) == 0x80 {
             // READ SECTOR command, type II
             // 100mSEC0
+            let controller_sd = self.single_density;
+            if !self.media_selected().density_matches(controller_sd) {
+                // Wrong density mode: WD1793 cannot find matching IDAM/DAM.
+                self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
+                self.raise_nmi = true;
+                return;
+            }
             self.multi_sector = (command & 0x10) != 0;
             let side_compare = (command & 0x02) != 0;
             let side_flag = if (command & 0x08) != 0 { 1u8 } else { 0u8 };
@@ -479,26 +497,49 @@ impl FloppyController {
         } else if (command & 0xf0) == 0xc0 {
             // READ ADDRESS command, type III
             // 1100_0E00
+            let controller_sd = self.single_density;
+            if !self.media_selected().density_matches(controller_sd) {
+                // Wrong density mode: no readable ID field in this mode.
+                self.status = FDCStatus::Busy as u8 | FDCStatus::SeekErrorOrRecordNotFound as u8;
+                self.read_address_countdown = 10;
+                self.raise_nmi = true;
+                return;
+            }
             let side_2 = self.side_2;
             let track = self.head_position; // Use physical head position
             let sector = self.sector;
 
-            let (valid, base_sector_id) = self.media_selected().read_address(side_2, track, sector);
+            let (valid, base_sector_id, n_code) = self.media_selected().read_address(side_2, track, sector);
             if valid {
-                let rotation_pos = (self.status_read_count / 10) as u8 % 10;
+                // Sectors per track from per-track geometry; fall back to sectors_per_side().
+                // This fixes the rotation counter for formats with != 10 sectors/track
+                // (e.g. Advent 5×1024B, Xerox 18×128B).
+                let spt = {
+                    let m = self.media_selected();
+                    m.track_geometry.get(&(track, side_2))
+                        .map(|g| g.sector_count)
+                        .unwrap_or_else(|| m.sectors_per_side())
+                };
+                let rotation_pos = (self.status_read_count / 10) as u8 % spt;
                 let sector_id = base_sector_id + rotation_pos;
-                
+
                 if self.trace {
-                    fdc_log!(self, "FDC: Read address ({},{},{}) -> sector_id={}", side_2, track, sector, sector_id);
+                    fdc_log!(self, "FDC: Read address ({},{},{}) -> sector_id={} n={} spt={}", side_2, track, sector, sector_id, n_code, spt);
                 }
-                // WD1793 datasheet: "The track address of the ID field is written
-                // into the sector register so that a comparison can be made by the user."
-                self.sector = self.head_position;
+                // Keep legacy behavior for base-0 Kaypro/KayPLUS formats to
+                // preserve boot compatibility, but align the Sector Register
+                // to the current ID field for base-1 foreign formats where
+                // TurboROM format probing may consume READ ADDRESS directly.
+                self.sector = if base_sector_id == 0 {
+                    self.head_position
+                } else {
+                    sector_id
+                };
                 self.data_buffer.clear();
                 self.data_buffer.push_back(self.head_position);
                 self.data_buffer.push_back(side_2 as u8);
                 self.data_buffer.push_back(sector_id);
-                self.data_buffer.push_back(2);
+                self.data_buffer.push_back(n_code); // N: sector size code from actual geometry
                 self.data_buffer.push_back(0xde);
                 self.data_buffer.push_back(0xad);
                 // Set BUSY - the real WD1793 stays busy while scanning for the
