@@ -75,6 +75,23 @@ This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, Tu
 | Kaypro 10 | 81-478c | 10MB HD + DSDD floppy | SY6545 CRTC |
 | Ultimate (NZ-COM/ZSDOS) | trom34 | DSDD floppies + HD | SY6545 CRTC |
 
+## TurboROM Non-Kaypro Floppy Format Support
+
+The TurboROM machine variants (`turbo_rom`, `turbo_rom_hd`, and `ultimate`)
+now support several non-Kaypro floppy formats directly from raw `.img` files.
+This mirrors TurboROM's native foreign-format read capability.
+
+| Format | Geometry | Raw image size | Notes |
+|--------|----------|----------------|-------|
+| Osborne SSSD | 40T x 1S x 10 x 256B | 102,400 bytes | Single-density (FM), sector IDs 1-10 |
+| Osborne SSDD (Advent 1K) | 40T x 1S x 5 x 1024B | 204,800 bytes | Double-density (MFM), sector IDs 1-5 |
+| Xerox 820-1 SSSD | 40T x 1S x 18 x 128B | 92,160 bytes | Single-density (FM), sector IDs 1-18 |
+| Epson QX-10 DSDD | 40T x 2S x 16 x 256B | 327,680 bytes | Double-density (MFM), sector IDs 1-16 on both sides |
+
+Notes:
+- These are raw sector images (`.img`). If you start from flux/container formats
+  like HFE/IMD, convert to raw IMG first.
+
 ## Configuration
 
 Edit `izkaypro.toml` to select the default Kaypro model by uncommenting the desired configuration:
