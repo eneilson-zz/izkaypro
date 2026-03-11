@@ -1,18 +1,52 @@
-# Kaypro emulator on the terminal
+# The Ultimate Kaypro Emulator
 
-[![Latest Release](https://img.shields.io/github/v/tag/eneilson-zz/izkaypro?label=release&sort=semver)](https://github.com/eneilson-zz/izkaypro/releases)
+[Latest Release](https://github.com/eneilson-zz/izkaypro/releases)
 
 ## What is this?
-This is a Kaypro emulator that runs either in a terminal window on Linux, OSX, FreeBSD, and Windows or natively rendered through using the original Kaypro chargen ROMs.  The emulator supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM and KayPLUS ROM variants.  The emulator also supports SSDD and DSDD disk images where ROM-appropriaate.  
+This is a Kaypro emulator that runs either in a terminal window on Linux, OSX, FreeBSD, and Windows or natively rendered using the original Kaypro chargen ROMs.  The emulator supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM with or without hard disk, and KayPLUS ROM variants.  The emulator also supports SSDD and DSDD disk images where ROM-appropriate.  
 - For best display results in terminal-only mode, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
 - For the best native Kaypro experience, add the --chargen parameter and the emulator will render a Kaypro-native display, including graphics capability. You will lose copy/paste functionality in this mode.
 
 This emulator is a fork of Ivan Izag's Kaypro II emulator.  It extends Ivan's work and adds support for more Kaypro models and hardware components.
 
+## How to build and run
 
-## Update 3/2026
-**Authentic rendering using the CHARGEN ROMs and phosphor display**
+To build from source, [install Rust 1.87 or later for your platform](https://rust-lang.org/tools/install/). 
 
+From the main directory:
+- Clone the repo and run `cargo build --release` 
+- To run `./target/release/izkaypro`
+
+# Other examples of running the emulator
+- `./target/release/izkaypro --model kaypro10`  (launch with Kaypro 10 emulation in terminal mode)
+- `./target/release/izkaypro --model ultimate --chargen` (launch a 4-84 Kaypro with TurboROM, HD, RTC and NZ-COM support using native rendering through the chargen ROMS)
+- `./target/release/izkapro --serial /dev/tty.usbserial-A60288TV --driveb ./disks/comm/k4-84-qterm.img` (launch the 4-84 Kaypro with serial port attached to a USB serial cable and the QTerm terminal program disk inserted in drive B)
+
+Run `./target/release/izkaypro -h` to see all of the parameter options available.
+
+## Linux build dependencies
+
+On Ubuntu/Debian, install the following packages before building:
+
+```
+sudo apt install libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
+```
+## The Ulimate Kaypro
+
+A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. RTC and serial port are also part of this machine.
+
+## But wait, there's more!
+**Add NZ-COM and ZSDOS to your Ultimate Kaypro**
+
+Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  The CP/M replacement NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/time stamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model ultimate --chargen` (--chargen is optional).  Once booted, type `nzcom`.  You will see the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
+
+One of the reasons the TurboROM-enabled Kaypro was so cool is that it allowed you to attach a hard drive yet still maintain a TPA size of 62.5k (about 8k better than what you can get with the standard Kaypro 10 HD BIOS).  I also filled the turborom_nz.hd image (the image used with the ulimate Kaypro model) with useful applications and utilities. You can check these out in the different user directories
+
+**Welcome to peak 80's CP/M computing!**
+
+![Kaypro Ultimate Screen](doc/kaypro_ultimate.jpg)
+
+## Authentic rendering using the CHARGEN ROMs and phosphor display**
 Kaypro screen rendering using the original character generator ROMs is now available. Launch with `--chargen` to open a native window that renders any of the emulated machines using the actual Kaypro chargen ROM. Supports all video attributes (reverse, dim, blink, underline), cursor rendering via SY6545 CRTC, and full keyboard input including function keys and Ctrl/Shift modifiers. Chargen support is included in the default build.
 
 Phosphor color options are available via `--phosphor`:
@@ -29,22 +63,6 @@ Individual colors can be overridden with `--phosphor-fg`, `--phosphor-bg`, and `
 ./izkaypro --chargen --phosphor white --phosphor-dim "#909090"
 ```
 ![Kaypro with Chargen ROM Support and Phosphor Screen](doc/Kaypro4-Chargen.jpg)
-
-## Update 2/2026
-**The Ulimate Kaypro**
-
-A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. An RTC and serial port are also part of this machine.
-
-## But wait, there's more!
-**Add NZ-COM and ZSDOS to your ultimate Kaypro**
-
-Now you can run the ultimate CP/M system on top of your ultimate Kaypro (the penultimate Kaypro?)!  The CP/M replacement NZ-COM is loaded onto the turborom_nz.hd disk image.  I also added the ZSDOS BDOS replacement that supports date/time stamping support in conjunction with the Kaypro real-time clock.  Run `./izkaypro --model ultimate --chargen` (--chargen is optional).  Once booted, type `nzcom`.  You will see the time displayed next to the system prompt.  Type `zxd` to see a directory listing with time/date/modified columns.
-
-One of the reasons the TurboROM-enabled Kaypro was so cool is that it allowed you to attach a hard drive yet still maintain a TPA size of 62.5k (about 8k better than what you can get with the standard Kaypro 10 HD BIOS).  I also filled the turborom_nz.hd image (the image used with the ulimate Kaypro model) with useful applications and utilities. You can check these out in the different user directories
-
-**Welcome to peak 80's CP/M computing!**
-
-![Kaypro Ultimate Screen](doc/kaypro_ultimate.jpg)
 
 ## What is/was a Kaypro computer?
 
@@ -127,33 +145,29 @@ Optional: override default disk images in the .toml file by adding:
 disk_a = "disks/my_boot_disk.img"
 disk_b = "disks/my_data_disk.img"
 ```
-## How to build and run
-From the main directory:  
-- To build type **cargo build --release**  
-- To run **./target/release/izkaypro**  
 
-## Usage examples
+## More usage examples
 
 izkaypro does not require installation, you just need the executable. It has the default ROM embedded as well as the boot CP/M disk and a blank disk in the second drive (if applicable). You can provide additional disk images as separate files. There are lots of disk images to play with in the ./disks directory.
 
 Run using internal defaults (currently set to the Kaypro 4-84 machine)
-- ./target/release/izkaypro
+- `./target/release/izkaypro`
 
 Run using a different machine and disk images
-- ./target/release/izkaypro --model turbo_rom --driveb ./disks/games/Games.img
+- `./target/release/izkaypro --model turbo_rom --driveb ./disks/games/Games.img`
 
 Run connecting to a serial device
-- ./target/release/izkapro --serial /dev/tty.usbserial-A60288TV --driveb ./disks/comm/k4-84-qterm.img
+- `./target/release/izkapro --serial /dev/tty.usbserial-A60288TV --driveb ./disks/comm/k4-84-qterm.img`
 
 ### What the emulator looks like
 By default, the emulator boots a Kaypro 4-84 machine with the CP/M 2.2g boot disk in drive A and a blank boot disk in drive B. You can type DIR to see a directory listing and B: to change drives. 
 
 ![Kaypro 4-84 Screen](doc/kaypro_4-84_screen.jpg)
 
-### Usage with external images
-The ./disks/ directory contains a number of Kaypro disk images to try. When starting the emulator, you can provide disk images on the command with the --drivea path.to.disk.image or --driveb path.to.disk.image parameters.
+### Using and inserting different disk images
+The ./disks/ directory contains a number of Kaypro disk images to try. When starting the emulator, you can provide disk images on the command with the `--drivea path.to.disk.img` or `--driveb path.to.disk.img` parameters.
 
-While using the emulator, press F5 or F6 to insert a new disk into drives A or B respectively (Note: CP/M likes to have the boot disk stay in drive A).  Press F4 to exit back to the host shell prompt.
+While using the emulator, press F5 or F6 to insert a new disk image into drives A or B respectively (Note: CP/M likes to have the boot disk stay in drive A).  Press F4 to exit the emulator.
 
 If using the Kaypro II configuration, the images have to be raw binary images of single-sided, double-density disks. The size must be 204800 bytes. See [disk images](doc/disk_images.md).
 
@@ -168,24 +182,12 @@ Press F1 to get additional help:
 
 ![Kaypro Help Screen](doc/kaypro_help_screen.jpg)
 
-## Build from source
-
-To build from source, install Rust 1.87 or later, clone the repo and run `cargo build --release`. To build and run directly execute `cargo run`.
-
-### Linux build dependencies
-
-On Ubuntu/Debian, install the following packages before building:
-
-```
-sudo apt install libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
-```
-
-## Kaypro 10 support added
-Kaypro 10 support with the 2.2u1 BIOS and 10MB hard disk is now available.  Drives A and B are 5MB hard disk partitions and Drive C is the floppy drive.
-
 ## To launch with Kaypro 10 support
+The Kaypro 10 is a nice Kaypro machine to start with because it has DSDD disk drive (drive C) and a 10 MB hard disk partitioned into two 5 MB drives (A and B).
 From the main directory:  
-- ./target/release/izkaypro --model=kaypro10
+- `./target/release/izkaypro --model=kaypro10`
+or run in native rending:
+- `./target/release/izkaypro --model=kaypro10 --chargen`
 
 ![Kaypro 10](doc/Kaypro10_screen.jpg)
 
