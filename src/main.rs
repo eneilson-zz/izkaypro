@@ -734,21 +734,23 @@ fn run_gui(
     floppy_drive_labels: (char, char),
     phosphor: renderer::PhosphorColors,
 ) {
-    use minifb::{Key, KeyRepeat, Window, WindowOptions, Scale};
+    use minifb::{Key, KeyRepeat, Window, WindowOptions, Scale, ScaleMode};
 
     let mut renderer = renderer::Renderer::new(&resolve_path(config.get_chargen_path()), phosphor);
 
-    // Kaypro II/4-83: 640×192 native → double scanlines to 640×384 for CRT
-    // aspect ratio, then Scale::X2 → 1280×768. Other models: 640×400 × X2.
-    let scale = Scale::X2;
-
+    // Open at 960×600 (1.5× the native 640×400 framebuffer) for a comfortable
+    // window size that matches the Kaypro's ~8:5 screen ratio. AspectRatioStretch
+    // scales the framebuffer to fill the window while preserving the ratio.
     let (display_w, display_h) = renderer.display_size();
+    let window_w = display_w * 3 / 2;
+    let window_h = display_h * 3 / 2;
     let mut window = Window::new(
         &format!("izkaypro — {}", config.get_display_name()),
-        display_w,
-        display_h,
+        window_w,
+        window_h,
         WindowOptions {
-            scale,
+            scale: Scale::X1,
+            scale_mode: ScaleMode::Stretch,
             resize: true,
             ..WindowOptions::default()
         },
