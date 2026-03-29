@@ -3,7 +3,7 @@
 [Latest Release](https://github.com/eneilson-zz/izkaypro/releases)
 
 ## What is this?
-This is a Kaypro emulator that runs either in a terminal window on Linux, OSX, FreeBSD, and Windows or natively rendered using the original Kaypro chargen ROMs.  The emulator supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM with or without hard disk, and KayPLUS ROM variants.  The emulator also supports SSDD and DSDD disk images where ROM-appropriate.  
+This is a Kaypro emulator that runs either in a terminal window on Linux, OSX, FreeBSD, and Windows or natively rendered using the original Kaypro chargen ROMs.  The emulator supports multiple Kaypro models including Kaypro II, 4-84, Kaypro 10 with hard disk, TurboROM with or without hard disk, KayPLUS ROM variants, and the Micro Cornucopia PRO 884-MAX ROM.  The emulator also supports SSDD and DSDD disk images where ROM-appropriate.  
 - For best display results in terminal-only mode, set your terminal window to 86 x 28.  You can also pass the --no-border parameter and use an 80x26 terminal window.
 - For the best native Kaypro experience, add the --chargen parameter and the emulator will render a Kaypro-native display, including graphics capability. You will lose copy/paste functionality in this mode.
 
@@ -80,18 +80,19 @@ It's a typical CP/M computer of the early 80s, built on a metal case with standa
 - One parallel port (not emulated by izkaypro)
 
 ## Supported Models
-This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, TurboROM+HD, KayPLUS ROM-enabled 4-84s, and the Kaypro 10 with WD1002-05 hard disk controller.  The emulator will probably work with other Kaypro ROMs, I just haven't test them yet.
+This version of the emulator supports the Kaypro II, 4/83, 2X/4-84, TurboROM, TurboROM+HD, KayPLUS ROM-enabled 4-84s, the Kaypro 10 with WD1002-05 hard disk controller, and the Micro Cornucopia PRO 884-MAX ROM.  The emulator will probably work with other Kaypro ROMs, I just haven't tested them yet.
 
-| Model | ROM | Disk Format | Video Mode |
-|-------|-----|-------------|------------|
-| Kaypro II | 81-149c | SSDD (200KB) | Memory-mapped |
-| Kaypro 4/83 | 81-232 | DSDD (400KB) | Memory-mapped |
-| Kaypro 2X/4/84 | 81-292a | DSDD (400KB) | SY6545 CRTC |
-| TurboROM 3.4 | trom34 | DSDD (400KB) | SY6545 CRTC |
-| TurboROM 3.4 + HD | trom34 | DSDD floppies + HD | SY6545 CRTC |
-| KayPLUS 84 | kplus84 | DSDD (400KB) | SY6545 CRTC |
-| Kaypro 10 | 81-478c | 10MB HD + DSDD floppy | SY6545 CRTC |
-| Ultimate (NZ-COM/ZSDOS) | trom34 | DSDD floppies + HD | SY6545 CRTC |
+| Model | `--model` | ROM | Disk Format | Video Mode |
+|-------|-----------|-----|-------------|------------|
+| Kaypro II | `kaypro_ii` | 81-149c | SSDD (200KB) | Memory-mapped |
+| Kaypro 4/83 | `kaypro4_83` | 81-232 | DSDD (400KB) | Memory-mapped |
+| Kaypro 2X/4/84 | `kaypro4_84` | 81-292a | DSDD (400KB) | SY6545 CRTC |
+| TurboROM 3.4 | `turbo_rom` | trom34 | DSDD (400KB) | SY6545 CRTC |
+| TurboROM 3.4 + HD | `turbo_rom_hd` | trom34 | DSDD floppies + HD | SY6545 CRTC |
+| KayPLUS 84 | `kayplus_84` | kplus84 | DSDD (400KB) | SY6545 CRTC |
+| Kaypro 10 | `kaypro10` | 81-478c | 10MB HD + DSDD floppy | SY6545 CRTC |
+| Ultimate (NZ-COM/ZSDOS) | `ultimate` | trom34 | DSDD floppies + HD | SY6545 CRTC |
+| PRO 884-MAX (Micro Cornucopia) | `pro884mx` | pro884_smx | DSDD (400KB) | SY6545 CRTC |
 
 ## TurboROM Non-Kaypro Floppy Format Support
 
@@ -192,6 +193,15 @@ or run in native rending:
 ![Kaypro 10](doc/Kaypro10_screen.jpg)
 
 
+## Micro Cornucopia PRO 884-MAX ROM support
+The PRO 884-MAX (also called "Max") was a third-party ROM replacement for the Kaypro 4-84, produced by Micro Cornucopia in the mid-1980s. It added a configurable status line with real-time clock display, enhanced BIOS features, and custom key remapping. The ROM was distributed with its own configuration utility (MCONFIG) and a disk full of utilities.
+
+To launch:
+- `./target/release/izkaypro --model pro884mx`
+- `./target/release/izkaypro --model pro884mx --chargen`
+
+Run MCONFIG from the boot disk to enable the status line, clock display, and other ROM features. The clock is driven by the Kaypro MM58167A RTC and displays live time in the status bar.
+
 ## Command line usage
 ```
 izkaypro [OPTIONS]
@@ -200,7 +210,7 @@ OPTIONS:
     -m, --model <MODEL>      Kaypro model preset
                              [models: kaypro_ii, kaypro4_83, kaypro4_84,
                               turbo_rom, turbo_rom_hd, ultimate, kayplus_84,
-                              kaypro10, custom]
+                              kaypro10, pro884mx, custom]
     -a, --drivea <FILE>      Disk image file for drive A
     -b, --driveb <FILE>      Disk image file for drive B
         --hd <FILE>          Hard disk image file for WD1002 models

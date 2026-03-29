@@ -36,12 +36,12 @@ use self::keyboard_win::Command;
     about = "Kaypro computer emulator for the terminal",
     long_about = "izkaypro - Kaypro Emulator\n\
         https://github.com/ivanizag/izkaypro\n\n\
-        Emulates Kaypro II, 4/83, 2X/4/84, TurboROM, TurboROM+HD, and KayPLUS computers.\n\
+        Emulates Kaypro II, 4/83, 2X/4/84, TurboROM, TurboROM+HD, KayPLUS, and PRO 884 SMX computers.\n\
         Configuration is loaded from izkaypro.toml; command-line arguments override config file settings.",
     version,
 )]
 struct Cli {
-    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, turbo_rom_hd, ultimate, kayplus_84, kaypro10, custom]
+    /// Kaypro model preset [models: kaypro_ii, kaypro4_83, kaypro4_84, turbo_rom, turbo_rom_hd, ultimate, kayplus_84, kaypro10, pro884mx, custom]
     #[arg(short = 'm', long, value_name = "MODEL")]
     model: Option<String>,
 
