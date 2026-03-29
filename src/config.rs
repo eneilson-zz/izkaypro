@@ -56,6 +56,9 @@ pub enum KayproModel {
     /// Kaypro 10 - Hard disk + floppy, SY6545 CRTC, Universal ROM
     #[serde(rename = "kaypro10")]
     Kaypro10,
+    /// PRO 884 SMX - DSDD, SY6545 CRTC, pro884_smx ROM
+    #[serde(rename = "pro884mx")]
+    Pro884mx,
     /// Custom configuration (use rom_file, disk_format, video_mode)
     #[serde(rename = "custom")]
     Custom,
@@ -204,6 +207,7 @@ impl Config {
                 "ultimate" => KayproModel::Ultimate,
                 "kayplus_84" => KayproModel::KayPlus84,
                 "kaypro10" => KayproModel::Kaypro10,
+                "pro884mx" => KayproModel::Pro884mx,
                 "custom" => KayproModel::Custom,
                 _ => {
                     eprintln!("Warning: Unknown model '{}', using default", m);
@@ -236,6 +240,7 @@ impl Config {
             KayproModel::Ultimate => "roms/trom34.rom",
             KayproModel::KayPlus84 => "roms/kplus84.rom",
             KayproModel::Kaypro10 => "roms/81-478c.rom",
+            KayproModel::Pro884mx => "roms/pro884_smx.rom",
             KayproModel::Custom => self.rom_file.as_deref().unwrap_or("roms/81-292a.rom"),
         }
     }
@@ -246,7 +251,7 @@ impl Config {
             KayproModel::KayproII => "roms/81-146a.rom",
             KayproModel::Kaypro4_83 => "roms/81-146a.rom",
             KayproModel::Kaypro10 => "roms/81-187.rom",
-            _ => "roms/81-235.rom", // 4/84, TurboROM, KayPLUS, Custom
+            _ => "roms/81-235.rom", // 4/84, TurboROM, KayPLUS, Custom, Pro884mx
         }
     }
 
@@ -261,6 +266,7 @@ impl Config {
             KayproModel::Ultimate => VideoMode::Sy6545Crtc,
             KayproModel::KayPlus84 => VideoMode::Sy6545Crtc,
             KayproModel::Kaypro10 => VideoMode::Sy6545Crtc,
+            KayproModel::Pro884mx => VideoMode::Sy6545Crtc,
             KayproModel::Custom => self.video_mode.into(),
         }
     }
@@ -276,6 +282,7 @@ impl Config {
             KayproModel::Ultimate => MediaFormat::DsDd,
             KayproModel::KayPlus84 => MediaFormat::DsDd,
             KayproModel::Kaypro10 => MediaFormat::DsDd,
+            KayproModel::Pro884mx => MediaFormat::DsDd,
             KayproModel::Custom => self.disk_format.into(),
         }
     }
@@ -303,6 +310,7 @@ impl Config {
             KayproModel::Ultimate => "disks/system/turborom_hd.img",
             KayproModel::KayPlus84 => "disks/system/kayplus_boot.img",
             KayproModel::Kaypro10 => "disks/system/kaypro10_boot.img",
+            KayproModel::Pro884mx => "disks/system/pro884mx_boot.img",
             KayproModel::Custom => self.disk_a.as_deref().unwrap_or("disks/system/k484-cpm22f-boot.img"),
         }
     }
@@ -318,6 +326,7 @@ impl Config {
             KayproModel::Ultimate => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::KayPlus84 => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::Kaypro10 => "disks/blank_disks/cpm22-kaypro4-blank.img",
+            KayproModel::Pro884mx => "disks/blank_disks/cpm22-kaypro4-blank.img",
             KayproModel::Custom => self.disk_b.as_deref().unwrap_or("disks/blank_disks/cpm22-kaypro4-blank.img"),
         }
     }
@@ -343,6 +352,7 @@ impl Config {
             KayproModel::Ultimate => "Kaypro 4/84 TurboROM 3.4 + WD HD + NZ-COM/ZSDOS".to_string(),
             KayproModel::KayPlus84 => "Kaypro 4/84 KayPLUS (DSDD)".to_string(),
             KayproModel::Kaypro10 => "Kaypro 10 (Hard Disk + Floppy, 81-478c ROM)".to_string(),
+            KayproModel::Pro884mx => "PRO 884 SMX (DSDD, pro884_smx ROM)".to_string(),
             KayproModel::Custom => format!("Custom ({})", self.get_rom_path()),
         }
     }
@@ -358,6 +368,7 @@ impl Config {
             KayproModel::Ultimate => "Ultimate Kaypro",
             KayproModel::KayPlus84 => "Kaypro 4-84 KayPLUS",
             KayproModel::Kaypro10 => "Kaypro 10",
+            KayproModel::Pro884mx => "PRO 884 SMX",
             KayproModel::Custom => "Custom Kaypro",
         }
     }

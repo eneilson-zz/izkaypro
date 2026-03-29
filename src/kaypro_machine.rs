@@ -486,6 +486,7 @@ impl KayproMachine {
         self.ram[0xFF5C] = hour;
     }
 
+
     pub fn save_bios(&self) -> Result<String, String> {
         let start = self.ram[1] as usize +
             ((self.ram[2] as usize) << 8) - 3;

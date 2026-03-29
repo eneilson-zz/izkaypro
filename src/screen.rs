@@ -10,6 +10,13 @@ pub struct Screen {
     machine_name: String,
     no_border: bool,
     pub floppy_drive_labels: (char, char),
+    /// Snapshot of the last rendered display content (chars + attrs, row-major).
+    /// Fixed 25×80 array — no allocation on the hot path.
+    /// Used to skip repaints when VRAM was written but visible content is unchanged.
+    last_render_snapshot: [(u8, u8); 25 * 80],
+    last_render_rows: usize,
+    /// Cursor address from the last rendered frame (for CRTC mode).
+    last_cursor_addr: usize,
 }
 
 #[allow(dead_code)]
@@ -39,6 +46,9 @@ impl Screen {
             machine_name: machine_name.to_string(),
             no_border,
             floppy_drive_labels: ('A', 'B'),
+            last_render_snapshot: [(0, 0); 25 * 80],
+            last_render_rows: 0,
+            last_cursor_addr: 0xFFFF,
         }
     }
     
@@ -162,12 +172,61 @@ impl Screen {
         } else {
             machine.vram_dirty
         };
-        
+
         let relevant_system_bits = machine.system_bits & SHOWN_SYSTEM_BITS;
         if !force && !vram_dirty && self.last_system_bits == relevant_system_bits {
             return;
         }
         self.last_system_bits = relevant_system_bits;
+
+        // Build a snapshot of what would be rendered and skip the repaint if
+        // nothing visible changed. This avoids full-screen redraws when only
+        // the status line clock updates (which writes to CRTC VRAM every second).
+        if !force && vram_dirty {
+            let display_rows = if machine.video_mode == VideoMode::Sy6545Crtc {
+                machine.crtc.displayed_rows().clamp(24, 25)
+            } else {
+                24
+            };
+            let cursor_addr = if machine.video_mode == VideoMode::Sy6545Crtc {
+                machine.crtc.cursor_addr() & 0x7FF
+            } else {
+                0xFFFF
+            };
+            let mut snapshot = [(0u8, 0u8); 25 * 80];
+            for row in 0..display_rows {
+                for col in 0..80 {
+                    let (code, attr) = if machine.video_mode == VideoMode::Sy6545Crtc {
+                        let start = machine.crtc.start_addr();
+                        let addr = (start + row * 80 + col) & 0x7FF;
+                        (machine.crtc.get_vram(addr), machine.crtc.get_attr(addr))
+                    } else {
+                        (machine.vram[row * 128 + col], 0u8)
+                    };
+                    snapshot[row * 80 + col] = (code, attr);
+                }
+            }
+            let used = display_rows * 80;
+            if display_rows == self.last_render_rows
+                && snapshot[..used] == self.last_render_snapshot[..used]
+                && cursor_addr == self.last_cursor_addr
+            {
+                // Visible content unchanged — clear dirty flag and skip repaint
+                if machine.video_mode == VideoMode::Sy6545Crtc {
+                    machine.crtc.vram_dirty = false;
+                } else {
+                    machine.vram_dirty = false;
+                }
+                return;
+            }
+            self.last_render_snapshot = snapshot;
+            self.last_render_rows = display_rows;
+            self.last_cursor_addr = cursor_addr;
+        } else if force {
+            // Force repaint — invalidate snapshot so next non-forced check works correctly
+            self.last_render_rows = 0;
+            self.last_cursor_addr = 0xFFFF;
+        }
 
         // Determine display height for cursor positioning
         let display_rows = if machine.video_mode == VideoMode::Sy6545Crtc {

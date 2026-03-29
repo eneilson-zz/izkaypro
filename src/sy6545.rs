@@ -147,8 +147,10 @@ impl Sy6545 {
             0..=17 => {
                 // Standard CRTC timing registers (R0-R17)
                 self.regs[self.reg_index as usize] = value;
-                // Cursor position/mode changes require screen refresh
-                if self.reg_index >= 10 && self.reg_index <= 15 {
+                // Start address changes (R12/R13) require screen refresh for scrolling.
+                // Cursor position/mode (R10/R11/R14/R15) are read live during render
+                // and do not need to trigger a full repaint.
+                if self.reg_index == 12 || self.reg_index == 13 {
                     self.vram_dirty = true;
                 }
                 if self.trace {

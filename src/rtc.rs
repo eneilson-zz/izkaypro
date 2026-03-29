@@ -57,8 +57,11 @@ impl Rtc {
     /// Read from port 0x20 (CLKADD) — echo back selected register.
     /// kayclk.com uses this for RTC detection: writes a register number,
     /// reads it back, and checks if the low nibble matches.
+    /// Bit 6 is always set to indicate the oscillator is running (MM58167A
+    /// drives this line high when the crystal oscillator is active).
+    /// The PRO 884 SMX ROM checks this bit before reading the clock.
     pub fn read_addr(&mut self) -> u8 {
-        let value = self.reg_select;
+        let value = self.reg_select | 0x40;
         if self.trace {
             rtc_log!(self, "RTC: Read addr = 0x{:02X}", value);
         }

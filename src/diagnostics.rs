@@ -578,6 +578,18 @@ pub fn run_boot_tests() -> Vec<TestResult> {
             hd_image: Some("disks/system/turborom_nz.hd"),
         },
         BootTestConfig {
+            name: "PRO 884 SMX",
+            rom_path: "roms/pro884_smx.rom",
+            video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
+            disk_format: crate::media::MediaFormat::DsDd,
+            disk_a: "disks/system/pro884mx_boot.img",
+            disk_b: "disks/blank_disks/cpm22-kaypro4-blank.img",
+            side1_sector_base: 10,
+            has_hard_disk: false,
+            is_kaypro10_hardware: false,
+            hd_image: None,
+        },
+        BootTestConfig {
             name: "Kaypro 10 (81-478c)",
             rom_path: "roms/81-478c.rom",
             video_mode: crate::kaypro_machine::VideoMode::Sy6545Crtc,
