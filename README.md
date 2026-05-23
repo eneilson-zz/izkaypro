@@ -17,6 +17,9 @@ From the main directory:
 - Clone the repo and run `cargo build --release` 
 - To run `./target/release/izkaypro`
 
+## Pre-built binaries
+If you don't want to compile the software yourself, you can download pre-built binaries for Mac, Windows and Linux on the release page.
+
 # Other examples of running the emulator
 - `./target/release/izkaypro --model kaypro10`  (launch with Kaypro 10 emulation in terminal mode)
 - `./target/release/izkaypro --model ultimate --chargen` (launch a 4-84 Kaypro with TurboROM, HD, RTC and NZ-COM support using native rendering through the chargen ROMS)
@@ -31,6 +34,7 @@ On Ubuntu/Debian, install the following packages before building:
 ```
 sudo apt install libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
 ```
+
 ## The Ulimate Kaypro
 
 A Kaypro 4-84 with a TurboROM BIOS plus hard disk support is now working.  Run `./izkaypro --model turbo_rom_hd` to boot from a TurboROM hard disk image. Drives A and B are 5MB hard disk partitions. Drives C and D are DSDD floppy drives. RTC and serial port are also part of this machine.
