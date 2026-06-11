@@ -146,6 +146,15 @@ pub struct KayproMachine {
     // 1.5625 kHz square wave into a piezo speaker. `None` when no audio backend
     // is attached (falls back to a terminal BEL). See src/audio.rs.
     beeper: Option<crate::audio::Beeper>,
+
+    // Centronics parallel printer (LST: device). The latched data byte (last
+    // written to the parallel data port: 0x08 on old models, 0x18 on the
+    // 4-84/Kaypro 10 family) is emitted to the printer on the strobe edge.
+    // `centronics_strobe_last` tracks the normalized "strobe asserted" state
+    // for edge detection. See src/printer.rs and update_system_bits[_k484].
+    printer: Option<crate::printer::Printer>,
+    centronics_data: u8,
+    centronics_strobe_last: bool,
 }
 
 impl KayproMachine {
@@ -211,7 +220,30 @@ impl KayproMachine {
             sio: Sio::new(trace_sio),
             rtc: Rtc::new(trace_rtc),
             beeper: None,
+            printer: None,
+            centronics_data: 0,
+            centronics_strobe_last: false,
         }
+    }
+
+    /// Attach a Centronics printer so LST: output is captured to ~/kaypro.out.
+    pub fn set_printer(&mut self, printer: crate::printer::Printer) {
+        self.printer = Some(printer);
+    }
+
+    /// Latch the current parallel data byte to the printer on the rising edge
+    /// of the (normalized) Centronics strobe — one byte per strobe pulse.
+    /// Callers pass `asserted` already normalized for their family's polarity
+    /// (old models: strobe active-high on port 0x1C bit 4; new models: strobe
+    /// active-low on port 0x14 bit 3).
+    fn centronics_strobe(&mut self, asserted: bool) {
+        if asserted && !self.centronics_strobe_last {
+            let byte = self.centronics_data;
+            if let Some(printer) = &mut self.printer {
+                printer.write_byte(byte);
+            }
+        }
+        self.centronics_strobe_last = asserted;
     }
 
     /// Attach an audio backend so the Ctrl-G bell plays the authentic
@@ -312,6 +344,11 @@ impl KayproMachine {
         let side_2 = bits & SystemBit::Side2 as u8 != 0;
         self.floppy_controller.set_side(side_2);
 
+        // Centronics strobe (old family): port 0x1C bit 4, active high. The ROM
+        // LIST routine pulses it SET then RES after writing the data byte; latch
+        // the byte to the printer on the rising edge.
+        self.centronics_strobe(bits & SystemBit::CentronicsStrobe as u8 != 0);
+
         if self.trace_system_bits {
             print_system_bits(self.system_bits);
         }
@@ -390,6 +427,12 @@ impl KayproMachine {
         self.system_bits = sys_bits;
         self.port14_raw = bits; // Save raw value for reads
 
+        // Centronics strobe (new family): port 0x14 bit 3, active LOW (idle
+        // high). The ROM LIST routine writes the data byte to port 0x18, then
+        // pulses bit 3 RES (1->0) then SET (0->1). Latch the byte to the
+        // printer on the falling edge (the assert, bit 3 == 0).
+        self.centronics_strobe(bits & 0x08 == 0);
+
         // SASI reset edge detection.
         // Kaypro 10 hardware uses an inverted /MR path (high->low on port bit 1).
         // TurboROM + WD host adapter uses non-inverted reset toggling (low->high).
@@ -445,7 +488,13 @@ impl KayproMachine {
         // back to distinguish Kaypro 10 (bit 1 = SASI /MR pull-up, stuck high)
         // from 4/84 (bit 1 = drive B select, reflects written value). Forcing
         // it high makes the ROM think it's K10 and limits floppy detection to 1.
-        self.port14_raw
+        //
+        // Bit 6 on READ is the Centronics printer BUSY/READY input (distinct
+        // from bit 6 on WRITE, which is CHSET). The ROM LIST routine polls it:
+        // bit 6 == 0 means ready. Force it low so the emulated printer is always
+        // ready — otherwise the BIOS LIST loop spins forever. (The written CHSET
+        // value would otherwise read back as 1 = busy and hang any print.)
+        self.port14_raw & !0x40
     }
 
     fn sio_b_write_control(&mut self, value: u8) {
@@ -649,6 +698,10 @@ impl Machine for KayproMachine {
             // commands (bell/keyclick); control writes configure the channel.
             0x05 => self.keyboard_command(value),
             0x07 => self.sio_b_write_control(value),
+            // Centronics parallel data latch (PIO-1 ch A). Old models write the
+            // data byte to 0x08, the 4-84/Kaypro 10 family to 0x18. We just
+            // latch it; it is emitted to the printer on the strobe pulse.
+            0x08 | 0x18 => self.centronics_data = value,
             // Floppy controller
             0x10 => self.floppy_controller.put_command(value),
             0x11 => self.floppy_controller.put_track(value),
@@ -792,7 +845,11 @@ impl Machine for KayproMachine {
                 if self.video_mode == VideoMode::Sy6545Crtc {
                     self.crtc.read_port_1c()
                 } else {
-                    self.system_bits
+                    // Old family system-bits read. Bit 3 is the Centronics
+                    // printer READY input (1 = ready); the BIOS LIST routine
+                    // polls it. Force it high so the printer is always ready
+                    // and LIST never hangs. See update_system_bits / printer.rs.
+                    self.system_bits | SystemBit::CentronicsReady as u8
                 }
             },
             0x1d => {

@@ -3,6 +3,7 @@ use iz80::*;
 use std::time::{Duration, Instant};
 
 mod audio;
+mod printer;
 mod config;
 mod kaypro_machine;
 mod floppy_controller;
@@ -387,6 +388,14 @@ fn main() {
         }
         engine
     };
+
+    // Centronics parallel printer: LST: output is captured to ~/kaypro.out
+    // (created on first print, appended thereafter). Always on.
+    {
+        let printer = printer::Printer::new();
+        println!("Printer: LST: output -> {}", printer.path().display());
+        machine.set_printer(printer);
+    }
 
     // Chargen mode: launch graphical window instead of terminal rendering
     #[cfg(feature = "gui")]
