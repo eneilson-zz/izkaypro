@@ -87,14 +87,52 @@ mod backend {
             // Samples per full square-wave cycle at the device's sample rate.
             let period = sample_rate / KAYPRO_BELL_HZ;
 
-            let stream = match sample_format {
-                cpal::SampleFormat::F32 => build_stream::<f32>(&device, &config, remaining.clone(), period),
-                cpal::SampleFormat::I16 => build_stream::<i16>(&device, &config, remaining.clone(), period),
-                cpal::SampleFormat::U16 => build_stream::<u16>(&device, &config, remaining.clone(), period),
-                _ => return None,
+            // Build the stream for whatever sample format the device reports.
+            // WASAPI (Windows) commonly uses F32 in shared mode but can report
+            // integer formats; CoreAudio/ALSA vary too. Cover every SizedSample
+            // type rather than silently falling back to a terminal BEL.
+            macro_rules! mk {
+                ($t:ty) => {
+                    build_stream::<$t>(&device, &config, remaining.clone(), period)
+                };
             }
-            .ok()?;
-            stream.play().ok()?;
+            let built = match sample_format {
+                cpal::SampleFormat::F32 => mk!(f32),
+                cpal::SampleFormat::F64 => mk!(f64),
+                cpal::SampleFormat::I8 => mk!(i8),
+                cpal::SampleFormat::I16 => mk!(i16),
+                cpal::SampleFormat::I32 => mk!(i32),
+                cpal::SampleFormat::I64 => mk!(i64),
+                cpal::SampleFormat::U8 => mk!(u8),
+                cpal::SampleFormat::U16 => mk!(u16),
+                cpal::SampleFormat::U32 => mk!(u32),
+                cpal::SampleFormat::U64 => mk!(u64),
+                other => {
+                    eprintln!(
+                        "Keyboard bell: unsupported audio sample format {:?}; falling back to terminal BEL",
+                        other
+                    );
+                    return None;
+                }
+            };
+            let stream = match built {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Keyboard bell: could not open audio stream ({}); falling back to terminal BEL", e);
+                    return None;
+                }
+            };
+            if let Err(e) = stream.play() {
+                eprintln!("Keyboard bell: could not start audio stream ({}); falling back to terminal BEL", e);
+                return None;
+            }
+            eprintln!(
+                "Keyboard bell: audio ready on \"{}\" ({:.0} Hz, {} ch, {:?})",
+                device.name().unwrap_or_else(|_| "default output".into()),
+                sample_rate,
+                config.channels,
+                sample_format
+            );
 
             let beeper = Beeper {
                 remaining,

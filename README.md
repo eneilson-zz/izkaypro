@@ -74,21 +74,12 @@ Individual colors can be overridden with `--phosphor-fg`, `--phosphor-bg`, and `
 
 ## Authentic keyboard bell
 
-The Ctrl-G (ASCII 7) bell is reproduced faithfully. On a real Kaypro the beeper
+The Ctrl-G (ASCII 7) bell is reproduced faithfully. On a real Kaypro the "beep"
 lives in the detachable keyboard, where an 8049 microcontroller drives a piezo
 speaker with a **1.5625 kHz square wave**; the BIOS rings it by sending a command
 over the keyboard serial link. izkaypro emulates that exact path and synthesizes
 the tone on your computer's default audio output (CoreAudio on macOS, WASAPI on
 Windows, ALSA on Linux).
-
-Audio is built in by default. To build without it (no audio dependency, e.g. for
-a minimal static binary), disable the `audio` feature — the bell then falls back
-to your terminal's BEL:
-
-```
-cargo build --release --no-default-features            # no GUI, no audio
-cargo build --release --no-default-features --features gui   # GUI, no audio
-```
 
 ## What is/was a Kaypro computer?
 
