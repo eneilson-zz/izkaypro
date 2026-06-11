@@ -140,6 +140,12 @@ pub struct KayproMachine {
     pub hard_disk: Option<HardDisk>,
     pub sio: Sio,
     pub rtc: Rtc,
+
+    // Keyboard bell. On real hardware the BIOS sends a beep command over SIO
+    // Channel B (port 0x05) to the detachable keyboard, whose 8049 drives a
+    // 1.5625 kHz square wave into a piezo speaker. `None` when no audio backend
+    // is attached (falls back to a terminal BEL). See src/audio.rs.
+    beeper: Option<crate::audio::Beeper>,
 }
 
 impl KayproMachine {
@@ -204,6 +210,50 @@ impl KayproMachine {
             } else { None },
             sio: Sio::new(trace_sio),
             rtc: Rtc::new(trace_rtc),
+            beeper: None,
+        }
+    }
+
+    /// Attach an audio backend so the Ctrl-G bell plays the authentic
+    /// 1.5625 kHz Kaypro keyboard tone instead of a terminal BEL.
+    pub fn set_beeper(&mut self, beeper: crate::audio::Beeper) {
+        self.beeper = Some(beeper);
+    }
+
+    /// Handle a byte written to the keyboard's serial channel (port 0x05,
+    /// SIO-1 Channel B data). On a real Kaypro the BIOS sends the bell here:
+    /// the detachable keyboard's 8049 decodes the command and drives a
+    /// 1.5625 kHz square wave into its piezo speaker.
+    ///
+    /// Command encoding (per the keyboard firmware, MAME kay_kbd.cpp):
+    ///   `xxxx xxx1` ignored; `xxxx Mx10` short beep; `xxxx M100` long beep;
+    ///   low three bits `000` = keyclick/mute config (no tone).
+    fn keyboard_command(&mut self, value: u8) {
+        if value & 0x01 != 0 {
+            return; // ignored
+        }
+        let long_beep = if value & 0x02 != 0 {
+            false // short beep — the Ctrl-G bell
+        } else if value & 0x04 != 0 {
+            true // long beep
+        } else {
+            return; // keyclick/mute config, no tone
+        };
+        match &self.beeper {
+            Some(beeper) => {
+                if long_beep {
+                    beeper.beep_long();
+                } else {
+                    beeper.beep_short();
+                }
+            }
+            None => {
+                // No audio backend (e.g. terminal-only/musl build): emit the
+                // host terminal's BEL so there is at least some feedback.
+                use std::io::Write;
+                print!("\x07");
+                let _ = std::io::stdout().flush();
+            }
         }
     }
     
@@ -595,7 +645,9 @@ impl Machine for KayproMachine {
             // SIO-1 Channel A
             0x04 => self.sio.write_data(value),
             0x06 => self.sio.write_control(value),
-            // SIO-1 Channel B (keyboard)
+            // SIO-1 Channel B (keyboard): data writes are host→keyboard
+            // commands (bell/keyclick); control writes configure the channel.
+            0x05 => self.keyboard_command(value),
             0x07 => self.sio_b_write_control(value),
             // Floppy controller
             0x10 => self.floppy_controller.put_command(value),

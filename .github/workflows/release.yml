@@ -13,10 +13,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
+          - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
-            features: "--no-default-features"
+            features: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -38,9 +38,13 @@ jobs:
       - name: Install Rust toolchain
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install musl tools (Linux)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install Linux build dependencies (GUI + audio)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}

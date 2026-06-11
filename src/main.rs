@@ -2,6 +2,7 @@ use clap::Parser;
 use iz80::*;
 use std::time::{Duration, Instant};
 
+mod audio;
 mod config;
 mod kaypro_machine;
 mod floppy_controller;
@@ -372,6 +373,20 @@ fn main() {
             Err(e) => eprintln!("Warning: {}", e),
         }
     }
+
+    // Start the audio backend for the keyboard bell (Ctrl-G). Kept alive for
+    // the whole interactive run (terminal loop or GUI). If no output device is
+    // available the bell falls back to a terminal BEL. Only built with the
+    // `audio` feature; the static-musl terminal release omits it.
+    #[cfg(feature = "audio")]
+    let _audio = {
+        let engine = audio::AudioEngine::new();
+        match &engine {
+            Some(e) => machine.set_beeper(e.beeper()),
+            None => eprintln!("Note: no audio output device found; bell will use terminal BEL"),
+        }
+        engine
+    };
 
     // Chargen mode: launch graphical window instead of terminal rendering
     #[cfg(feature = "gui")]

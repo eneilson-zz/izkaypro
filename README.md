@@ -29,11 +29,15 @@ Run `./target/release/izkaypro -h` to see all of the parameter options available
 
 ## Linux build dependencies
 
-On Ubuntu/Debian, install the following packages before building:
+On Ubuntu/Debian, install the following packages before building. `libasound2-dev`
+provides ALSA for the keyboard bell audio; the rest are for the `--chargen` GUI:
 
 ```
-sudo apt install libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
+sudo apt install libasound2-dev libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
 ```
+
+The pre-built Linux binary links ALSA dynamically, so the runtime library
+(`libasound2`, present on essentially every desktop Linux) must be installed.
 
 ## The Ulimate Kaypro
 
@@ -67,6 +71,24 @@ Individual colors can be overridden with `--phosphor-fg`, `--phosphor-bg`, and `
 ./izkaypro --chargen --phosphor white --phosphor-dim "#909090"
 ```
 ![Kaypro with Chargen ROM Support and Phosphor Screen](doc/Kaypro4-Chargen.jpg)
+
+## Authentic keyboard bell
+
+The Ctrl-G (ASCII 7) bell is reproduced faithfully. On a real Kaypro the beeper
+lives in the detachable keyboard, where an 8049 microcontroller drives a piezo
+speaker with a **1.5625 kHz square wave**; the BIOS rings it by sending a command
+over the keyboard serial link. izkaypro emulates that exact path and synthesizes
+the tone on your computer's default audio output (CoreAudio on macOS, WASAPI on
+Windows, ALSA on Linux).
+
+Audio is built in by default. To build without it (no audio dependency, e.g. for
+a minimal static binary), disable the `audio` feature — the bell then falls back
+to your terminal's BEL:
+
+```
+cargo build --release --no-default-features            # no GUI, no audio
+cargo build --release --no-default-features --features gui   # GUI, no audio
+```
 
 ## What is/was a Kaypro computer?
 
