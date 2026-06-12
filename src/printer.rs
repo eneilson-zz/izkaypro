@@ -82,6 +82,14 @@ impl Printer {
         // space (e.g. 0xA0), which the printer path emits raw. Strip it so text
         // prints cleanly (0xA0 -> space). Control codes (< 0x80) are unaffected.
         let byte = byte & 0x7F;
+        // If kaypro.out was deleted out from under us mid-run, the OS keeps the
+        // unlinked inode alive for our still-open handle: writes would silently
+        // succeed into the orphaned inode and no kaypro.out would ever reappear
+        // in the directory. Detect the vanished path and drop the stale handle
+        // so the block below re-creates the file.
+        if self.file.is_some() && !self.path.exists() {
+            self.file = None;
+        }
         if self.file.is_none() {
             match OpenOptions::new().create(true).append(true).open(&self.path) {
                 Ok(f) => self.file = Some(f),
