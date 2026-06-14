@@ -104,11 +104,12 @@ If you don't want to compile it yourself, download a pre-built binary for Mac,
 Windows, or Linux from the release page.
 
 ### Linux build dependencies
-On Ubuntu/Debian, install the following packages before building. `libasound2-dev`
-provides ALSA for the keyboard bell audio; the rest are for the `--chargen` GUI:
+On Ubuntu/Debian, install the packages below before building. `libasound2-dev`
+provides ALSA for the keyboard bell audio. The X11 libraries are for the `--chargen`
+GUI window and `libwayland-dev` is for file-open dialogs:
 
 ```
-sudo apt install libasound2-dev libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
+sudo apt install pkg-config libasound2-dev libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev
 ```
 
 The pre-built Linux binary links ALSA dynamically, so the runtime library

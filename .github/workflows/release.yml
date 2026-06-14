@@ -43,8 +43,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libasound2-dev \
-            libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev libgtk-3-dev
+            pkg-config libasound2-dev \
+            libxkbcommon-dev libx11-dev libxcursor-dev libwayland-dev
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
